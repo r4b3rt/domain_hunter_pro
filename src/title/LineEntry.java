@@ -13,27 +13,27 @@ import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
+import org.apache.commons.lang3.StringUtils;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
 import com.alibaba.fastjson.JSON;
+import com.bit4woo.utilbox.burp.HelperPlus;
+import com.bit4woo.utilbox.utils.CharsetUtils;
+import com.bit4woo.utilbox.utils.DomainUtils;
+import com.bit4woo.utilbox.utils.IPAddressUtils;
+import com.bit4woo.utilbox.utils.UrlUtils;
 import com.google.common.hash.HashCode;
 
 import ASN.ASNEntry;
 import ASN.ASNQuery;
-import base.Commons;
 import burp.BurpExtender;
-import burp.Getter;
-import burp.HelperPlus;
 import burp.IExtensionHelpers;
 import burp.IHttpRequestResponse;
 import burp.IHttpService;
 import burp.IResponseInfo;
 import domain.CertInfo;
-import utils.DomainNameUtils;
-import utils.IPAddressUtils;
 import utils.NetworkUtils;
-import utils.URLUtils;
 
 public class LineEntry {
 	private static final Logger log = LogManager.getLogger(LineEntry.class);
@@ -102,7 +102,9 @@ public class LineEntry {
 	private String icon_url = "";
 	private byte[] icon_bytes = new byte[0];
 	private String icon_hash = "";
+	//关于icon_hash，fofa、zoomeye使用了同一种算法，hunter、quake使用了同一种算法（都是md5）
 	private String ASNInfo = "";
+	private int AsnNum =-1;
 	private String time = "";
 	// 如上几个字段需要网络请求或查询
 
@@ -211,7 +213,7 @@ public class LineEntry {
 				IResponseInfo responseInfo = helpers.analyzeResponse(response);
 				statuscode = responseInfo.getStatusCode();
 
-				HelperPlus getter = new HelperPlus(helpers);
+				HelperPlus getter = BurpExtender.getHelperPlus();
 				String tmpServer = getter.getHeaderValueOf(false, response, "Server");
 				if (tmpServer != null) {
 					webcontainer = tmpServer;
@@ -235,7 +237,7 @@ public class LineEntry {
 	}
 
 	private void parseURL(URL url) {
-		this.url = URLUtils.getUrlWithDefaultPort(url.toString());// 统一格式，包含默认端口
+		this.url = UrlUtils.getFullUrlWithDefaultPort(url.toString());// 统一格式，包含默认端口
 		port = url.getPort() == -1 ? url.getDefaultPort() : url.getPort();
 		host = url.getHost();
 		protocol = url.getProtocol();
@@ -256,7 +258,7 @@ public class LineEntry {
 	 */
 	public LineEntry firstRequest(GetTitleTempConfig config) {
 		// 第一步：DNS解析
-		HashMap<String, Set<String>> dnsResult = DomainNameUtils.dnsquery(host, null);
+		HashMap<String, Set<String>> dnsResult = DomainUtils.dnsQuery(host, null);
 		this.IPSet = dnsResult.get("IP");
 		this.CNAMESet = dnsResult.get("CDN");
 		if (IPSet == null || IPSet.size() <= 0) {
@@ -267,7 +269,7 @@ public class LineEntry {
 		} else {// 默认过滤私有IP
 			boolean isInPrivateNetwork = config.isHandlePriavte();
 			String ip = new ArrayList<>(IPSet).get(0);
-			if (IPAddressUtils.isPrivateIPv4(ip) && !isInPrivateNetwork) {// 外网模式，内网域名，仅仅显示域名和IP。
+			if (IPAddressUtils.isPrivateIPv4NoPort(ip) && !isInPrivateNetwork) {// 外网模式，内网域名，仅仅显示域名和IP。
 				setTitle("Private IP");
 				return this;
 			}
@@ -290,12 +292,12 @@ public class LineEntry {
 
 			// 第四步：获取证书域名
 			if (this.url.toLowerCase().startsWith("https://")) {
-				this.CertDomainSet = CertInfo.getAlternativeDomains(url);
+				this.CertDomainSet = new CertInfo().getAlternativeDomains(url);
 			}
 		} else {
 			// 当域名可以解析，但是所有URL请求都失败的情况下。添加一条DNS解析记录
 			// TODO 但是IP可以ping通但是无成功的web请求的情况还没有处理
-			if (DomainNameUtils.isValidDomain(host) && !IPSet.isEmpty()) {
+			if (DomainUtils.isValidDomainNoPort(host) && !IPSet.isEmpty()) {
 				setTitle("DNS Record");
 			}
 		}
@@ -312,18 +314,20 @@ public class LineEntry {
 
 		IHttpRequestResponse info = BurpExtender.getCallbacks().makeHttpRequest(service, request);
 		// BurpExtender.getStdout().println(new String(info.getResponse()));
-		parse(info);
+		if (info != null) {
+			parse(info);
+		}
 	}
 
 	public void DoRequestCertInfoAgain() throws MalformedURLException {
 		try {
 			String url = this.getUrl();
 			if (url.toLowerCase().startsWith("https")) {
-				CertDomainSet = CertInfo.getAlternativeDomains(url);
+				CertDomainSet = new CertInfo().getAlternativeDomains(url);
 			}
 
-			if (!IPAddressUtils.isValidIP(host)) {// 目标是域名
-				HashMap<String, Set<String>> result = DomainNameUtils.dnsquery(host, null);
+			if (!IPAddressUtils.isValidIPv4NoPort(host)) {// 目标是域名
+				HashMap<String, Set<String>> result = DomainUtils.dnsQuery(host, null);
 				CNAMESet = result.get("CDN");
 			}
 		} catch (Exception e) {
@@ -337,10 +341,10 @@ public class LineEntry {
 	 * @return
 	 */
 	public String getUrl() {// 为了格式统一，和查找匹配更精确，都包含了默认端口
-		if (url == null || url.equals("")) {
+		if (StringUtils.isEmpty(url)) {
 			return protocol + "://" + host + ":" + port + "/";
 		}
-		return URLUtils.getUrlWithDefaultPort(url);
+		return UrlUtils.getFullUrlWithDefaultPort(url);
 	}
 
 	/**
@@ -350,11 +354,11 @@ public class LineEntry {
 	 * @return
 	 */
 	public String fetchUrlWithCommonFormate() {
-		if (url == null || url.equals("")) {
+		if (StringUtils.isEmpty(url)) {
 			url = protocol + "://" + host + ":" + port + "/";
 		}
 		// 不要修改原始url的格式！即都包含默认端口。因为数据库中更新对应记录是以URL为依据的，否则不能成功更新记录。
-		String usualUrl = HelperPlus.removeDefaultPort(url);
+		String usualUrl = HelperPlus.removeUrlDefaultPort(url);
 		return usualUrl;
 	}
 
@@ -429,10 +433,10 @@ public class LineEntry {
 		String CNames = String.join(",", getCNAMESet());
 		String CertDomains = String.join(",", getCertDomainSet());
 		Set<String> tmp = new HashSet<>();
-		if (!CNames.equals("")) {
+		if (!StringUtils.isEmpty(CNames)) {
 			tmp.add(CNames);
 		}
-		if (!CertDomains.equals("")) {
+		if (!StringUtils.isEmpty(CertDomains)) {
 			tmp.add(CertDomains);
 		}
 		return String.join("|", tmp);
@@ -479,8 +483,7 @@ public class LineEntry {
 	}
 
 	public String getBodyText() {
-		Getter getter = new Getter(BurpExtender.getCallbacks().getHelpers());
-		byte[] byte_body = getter.getBody(false, response);
+		byte[] byte_body = HelperPlus.getBody(false, response);
 		return new String(byte_body);
 	}
 
@@ -492,12 +495,12 @@ public class LineEntry {
 	}
 
 	public static String covertCharSet(byte[] response) {
-		String originalCharSet = Commons.detectCharset(response);
+		String originalCharSet = CharsetUtils.detectCharset(response);
 		// BurpExtender.getStderr().println(url+"---"+originalCharSet);
 
 		if (originalCharSet != null && !originalCharSet.equalsIgnoreCase(systemCharSet)) {
 			try {
-				System.out.println("正将编码从" + originalCharSet + "转换为" + systemCharSet + "[windows系统编码]");
+				//System.out.println("正将编码从" + originalCharSet + "转换为" + systemCharSet + "[windows系统编码]");
 				byte[] newResponse = new String(response, originalCharSet).getBytes(systemCharSet);
 				return new String(newResponse, systemCharSet);
 			} catch (UnsupportedEncodingException e) {
@@ -505,7 +508,7 @@ public class LineEntry {
 			} catch (Exception e) {
 				e.printStackTrace(BurpExtender.getStderr());
 				log.error(e);
-				BurpExtender.getStderr().print("title 编码转换失败");
+				//BurpExtender.getStderr().print("title 编码转换失败");
 			}
 		}
 		return new String(response);
@@ -523,8 +526,7 @@ public class LineEntry {
 		// https://developer.mozilla.org/zh-CN/docs/Web/HTTP/Redirections
 		if (statuscode >= 300 && statuscode <= 308) {
 			IExtensionHelpers helpers = BurpExtender.getCallbacks().getHelpers();
-			Getter getter = new Getter(helpers);
-
+			HelperPlus getter = BurpExtender.getHelperPlus();
 			String Locationurl = getter.getHeaderValueOf(false, response, "Location");
 			if (null != Locationurl) {
 				title = " --> " + Locationurl;
@@ -541,31 +543,27 @@ public class LineEntry {
 	 * 
 	 */
 	public void handleFavicon() {
-		if (response == null) {
+		if (response == null || statuscode != 200) {
 			icon_url = WebIcon.getFaviconUrl(url, null);
 		} else {
 			String bodyText = covertCharSet(response);
 			icon_url = WebIcon.getFaviconUrl(url, bodyText);
 		}
-		icon_bytes = WebIcon.getFavicon(icon_url);
-		icon_hash = WebIcon.getHash(icon_bytes);
-		
-		icon_bytes = WebIcon.convertIcoToPng(icon_bytes);//存储的是PNG格式的数据，不是原始格式了
+		if (statuscode>0 && statuscode <500){
+			//只有 web有正常的响应时才考虑请求favicon
+			icon_bytes = WebIcon.getFavicon(icon_url);
+			icon_hash = WebIcon.getHash(icon_bytes);
+			icon_bytes = WebIcon.convertIcoToPng(icon_bytes);//存储的是PNG格式的数据，不是原始格式了
+		}
 	}
 
 	public String getHeaderValueOf(boolean isRequest, String headerName) {
 		IExtensionHelpers helpers = BurpExtender.getCallbacks().getHelpers();
-		Getter getter = new Getter(helpers);
-		try {
-			if (isRequest) {
-				String value = getter.getHeaderValueOf(false, request, headerName);
-			} else {
-				String value = getter.getHeaderValueOf(false, response, headerName);
-			}
-			return title;
-		} catch (Exception e) {
-			// e.printStackTrace();
-			return "";
+		HelperPlus getter = BurpExtender.getHelperPlus();
+		if (isRequest) {
+			return getter.getHeaderValueOf(false, request, headerName);
+		} else {
+			return getter.getHeaderValueOf(false, response, headerName);
 		}
 	}
 
@@ -582,12 +580,16 @@ public class LineEntry {
 	private static String grepTitle(String bodyText) {
 		String title = "";
 
+		if (!isHtml(bodyText)){
+			return title;
+		}
+
 		String regex = "<title(.*?)>(.*?)</title>";
 		Pattern p = Pattern.compile(regex, Pattern.CASE_INSENSITIVE);
 		Matcher m = p.matcher(bodyText);
 		while (m.find()) {
 			title = m.group(2);// 注意
-			if (title != null && !title.equals("")) {
+			if (!StringUtils.isEmpty(title)) {
 				return title;
 			}
 		}
@@ -597,11 +599,19 @@ public class LineEntry {
 		Matcher mh = ph.matcher(bodyText);
 		while (mh.find()) {
 			title = mh.group(2);
-			if (title != null && !title.equals("")) {
+			if (!StringUtils.isEmpty(title)) {
 				return title;
 			}
 		}
 		return title;
+	}
+
+	private static boolean isHtml(String bodyText){
+		if (StringUtils.isEmpty(bodyText)){
+			return false;
+		}
+
+		return bodyText.contains("<!DOCTYPE html>") || bodyText.contains("<html>");
 	}
 
 	public int getPort() {
@@ -703,6 +713,14 @@ public class LineEntry {
 		this.ASNInfo = ASNInfo;
 	}
 
+	public int getAsnNum() {
+		return AsnNum;
+	}
+
+	public void setAsnNum(int asnNum) {
+		AsnNum = asnNum;
+	}
+
 	public String getFirstIP() {
 		Iterator<String> it = this.IPSet.iterator();
 		if (it.hasNext()) {
@@ -712,15 +730,17 @@ public class LineEntry {
 		return "";
 	}
 
+	@Deprecated
 	public void freshASNInfo() {
 		try {
 			Iterator<String> it = this.IPSet.iterator();
 			if (it.hasNext()) {
 				String ip = it.next();
-				if (IPAddressUtils.isValidIP(ip) && !IPAddressUtils.isPrivateIPv4(ip)) {
-					ASNEntry asn = ASNQuery.query(ip);
+				if (IPAddressUtils.isValidIPv4NoPort(ip) && !IPAddressUtils.isPrivateIPv4NoPort(ip)) {
+					ASNEntry asn = ASNQuery.getInstance().query(ip);
 					if (null != asn) {
 						this.ASNInfo = asn.fetchASNDescription();
+						this.AsnNum = Integer.parseInt(asn.getAsn());
 					}
 				}
 			}
@@ -730,14 +750,14 @@ public class LineEntry {
 	}
 
 	public void addComment(String commentToAdd) {
-		if (commentToAdd == null || commentToAdd.trim().equals(""))
+		if (StringUtils.isEmpty(commentToAdd))
 			return;
 		// commentToAdd本身可能就是以逗号分隔的
 		comments.addAll(Arrays.asList(commentToAdd.split(",")));
 	}
 
 	public void removeComment(String commentToRemove) {
-		if (commentToRemove == null || commentToRemove.trim().equals(""))
+		if (StringUtils.isEmpty(commentToRemove))
 			return;
 
 		comments.remove(commentToRemove);

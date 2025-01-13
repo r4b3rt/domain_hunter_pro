@@ -1,28 +1,30 @@
 package GUI;
 
 import java.awt.EventQueue;
+import java.awt.Point;
+import java.awt.Rectangle;
+import java.awt.event.MouseAdapter;
+import java.awt.event.MouseEvent;
+import java.awt.event.MouseMotionAdapter;
 import java.io.File;
 import java.io.PrintWriter;
-import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.CopyOnWriteArraySet;
 import java.util.concurrent.LinkedBlockingQueue;
 
 import javax.swing.JFrame;
-import javax.swing.JPanel;
 import javax.swing.JTabbedPane;
-import javax.swing.SwingWorker;
 
+import InternetSearch.SearchPanel;
 import Tools.ToolPanel;
 import base.Commons;
-import base.dbFileChooser;
 import burp.BurpExtender;
-import burp.IBurpExtender;
 import burp.IHttpRequestResponse;
 import burp.ProjectMenu;
+import config.ConfigManager;
+import config.ConfigName;
 import config.ConfigPanel;
-import config.DataLoadManager;
 import dao.DomainDao;
 import dao.TargetDao;
 import dao.TitleDao;
@@ -34,19 +36,19 @@ import title.TitlePanel;
 public class GUIMain extends JFrame {
 
 	//当多个实例都有相同的是static field时，对象间对static属性的修改会互相影响，因为多个对象共享一个属性的copy！！
-	public IBurpExtender burp;
-	public DomainPanel domainPanel;
-	public TitlePanel titlePanel;
-	public ToolPanel toolPanel;
-	public ConfigPanel configPanel;
+	private DomainPanel domainPanel;
+	private TitlePanel titlePanel;
+	private ToolPanel toolPanel;
+	private ConfigPanel configPanel;
+	private SearchPanel searchPanel;
 
-	public File currentDBFile;
-	public ProjectMenu projectMenu;
+	private final JTabbedPane tabbedWrapper;
 
-	public PrintWriter stdout;
-	public PrintWriter stderr;
+	private ProjectMenu projectMenu;
 
-	public dbFileChooser dbfc = new dbFileChooser();
+	private PrintWriter stdout;
+	private PrintWriter stderr;
+
 	//use to store messageInfo
 	private Set<String> httpsChecked = new CopyOnWriteArraySet<>();
 
@@ -56,41 +58,54 @@ public class GUIMain extends JFrame {
 	//temp variable to identify checked https用于记录已经做过HTTPS证书信息获取的httpService
 
 	private DomainProducer liveAnalysisTread;
-	private DataLoadManager dataLoadManager;
+
+	// 记录是否需要显示右键菜单
+	final boolean[] showPopup = {false};
 
 	public DomainPanel getDomainPanel() {
 		return domainPanel;
 	}
+
 	public void setDomainPanel(DomainPanel domainPanel) {
 		this.domainPanel = domainPanel;
 	}
+
 	public TitlePanel getTitlePanel() {
 		return titlePanel;
 	}
+
 	public void setTitlePanel(TitlePanel titlePanel) {
 		this.titlePanel = titlePanel;
 	}
+
 	public ToolPanel getToolPanel() {
 		return toolPanel;
 	}
+
 	public void setToolPanel(ToolPanel toolPanel) {
 		this.toolPanel = toolPanel;
 	}
+
 	public ConfigPanel getConfigPanel() {
 		return configPanel;
 	}
+
 	public void setConfigPanel(ConfigPanel configPanel) {
 		this.configPanel = configPanel;
 	}
-	public File getCurrentDBFile() {
-		return currentDBFile;
+
+	public SearchPanel getSearchPanel() {
+		return searchPanel;
 	}
-	public void setCurrentDBFile(File currentDBFile) {
-		this.currentDBFile = currentDBFile;
+
+	public void setSearchPanel(SearchPanel searchPanel) {
+		this.searchPanel = searchPanel;
 	}
+
 	public ProjectMenu getProjectMenu() {
 		return projectMenu;
 	}
+
 	public void setProjectMenu(ProjectMenu projectMenu) {
 		this.projectMenu = projectMenu;
 	}
@@ -127,13 +142,6 @@ public class GUIMain extends JFrame {
 		this.liveAnalysisTread = liveAnalysisTread;
 	}
 
-	public DataLoadManager getDataLoadManager() {
-		//每次都应该从新从磁盘加载，因为它可能被更改过了
-		return dataLoadManager =DataLoadManager.loadFromDisk(this);
-	}
-	public void setDataLoadManager(DataLoadManager dataLoadManager) {
-		this.dataLoadManager = dataLoadManager;
-	}
 	public void startLiveCapture() {
 		liveAnalysisTread = new DomainProducer(this, liveinputQueue, 9999);//必须是9999，才能保证流量进程不退出。
 		liveAnalysisTread.start();
@@ -146,17 +154,16 @@ public class GUIMain extends JFrame {
 		}
 	}
 
-	public GUIMain(IBurpExtender burp) {//构造函数
-		this.burp = burp;
-		try{
+	public GUIMain() {//构造函数
+		try {
 			stdout = new PrintWriter(BurpExtender.getCallbacks().getStdout(), true);
 			stderr = new PrintWriter(BurpExtender.getCallbacks().getStderr(), true);
-		}catch (Exception e){
+		} catch (Exception e) {
 			stdout = new PrintWriter(System.out, true);
 			stderr = new PrintWriter(System.out, true);
 		}
 
-		JTabbedPane tabbedWrapper = new JTabbedPane();
+		tabbedWrapper = new JTabbedPane();
 		tabbedWrapper.setName("DomainHunterPro");//需要在从burpFrame向下查找该插件时用到
 		setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
 		setBounds(100, 100, 1174, 497);
@@ -165,100 +172,88 @@ public class GUIMain extends JFrame {
 		titlePanel = new TitlePanel(this);
 		toolPanel = new ToolPanel(this);
 		configPanel = new ConfigPanel(this);
+		searchPanel = new SearchPanel(this);
 		tabbedWrapper.addTab("Domains", null, domainPanel, null);
 		tabbedWrapper.addTab("Titles", null, titlePanel, null);
-		tabbedWrapper.addTab("Tools", null,toolPanel,null);
-		tabbedWrapper.addTab("Config", null,configPanel,null);
+		tabbedWrapper.addTab("Search", null, searchPanel, null);
+		tabbedWrapper.addTab("Tools", null, toolPanel, null);
+		tabbedWrapper.addTab("Config", null, configPanel, null);
 
-		setProjectMenu(new ProjectMenu(this));
-		getProjectMenu().Add();
-		
-		dataLoadManager = getDataLoadManager();
+		projectMenu = new ProjectMenu(this);
+
+		//mouseAction();
+	}
+
+	public void renewConfigPanel() {
+		int index = tabbedWrapper.indexOfTab("Config"); // 查找指定标题的标签页索引
+		if (index != -1) { // 如果找到了索引
+			tabbedWrapper.removeTabAt(index); // 移除该标签页
+		}
+		configPanel = new ConfigPanel(this);
+		tabbedWrapper.addTab("Config", null, configPanel, null);
+		tabbedWrapper.repaint();
+	}
+
+	public void mouseAction() {
+		// 添加右键菜单到 JTabbedPane
+		UnlockMenu unlockMenu = new UnlockMenu(this);
+
+		tabbedWrapper.addMouseListener(new MouseAdapter() {
+			@Override
+			public void mouseReleased(MouseEvent e) {
+				if (e.isPopupTrigger()) {
+					if (showPopup[0]) {
+						unlockMenu.show(e.getComponent(), e.getX(), e.getY());
+					}
+				}
+			}
+		});
+
+		tabbedWrapper.addMouseMotionListener(new MouseMotionAdapter() {
+			@Override
+			public void mouseMoved(MouseEvent e) {
+				showPopup[0] = isTabArea(e);
+			}
+
+			// 判断是否点击在选项卡区域
+			private boolean isTabArea(MouseEvent e) {
+				Point point = e.getPoint();
+				// 获取 JTabbedPane 的 UI 和面板的边界
+				JTabbedPane tabbedPane = (JTabbedPane) e.getComponent();
+				Rectangle tabArea = tabbedPane.getUI().getTabBounds(tabbedPane, tabbedPane.getSelectedIndex());
+				return tabArea.contains(point);
+			}
+		});
 	}
 
 	/**
 	 * 仅仅锁住图形界面，不影响后台处理数据
 	 */
 	public void lockUnlock() {
-		if (this.getContentPane().isEnabled()) {
-			((JTabbedPane)this.getContentPane()).addTab("Locked",null,new JPanel(),null);
-			int size = ((JTabbedPane)this.getContentPane()).getTabCount();
-			((JTabbedPane)this.getContentPane()).setSelectedIndex(size-1);
+		if (tabbedWrapper.isEnabled()) {
+			tabbedWrapper.addTab("Locked", null, new LockPanel(this), null);
+			int size = tabbedWrapper.getTabCount();
+			tabbedWrapper.setSelectedIndex(size - 1);
 			this.getContentPane().setEnabled(false);
-			projectMenu.setText("DomainHunter*");
-			projectMenu.lockMenu.setText("Unlock");
-			ConfigPanel.DisplayContextMenuOfBurp.setSelected(false);//不显示burp右键菜单
-		}else {
-			this.getContentPane().setEnabled(true);
-			int size = ((JTabbedPane)this.getContentPane()).getTabCount();
-			((JTabbedPane)this.getContentPane()).removeTabAt(size-1);
-			((JTabbedPane)this.getContentPane()).setSelectedIndex(0);
-			projectMenu.lockMenu.setText("Lock");
-			projectMenu.setText("DomainHunter");
-			ConfigPanel.DisplayContextMenuOfBurp.setSelected(true);//显示右键菜单
+			ConfigManager.setConfigValue(ConfigName.showBurpMenu, false);//不显示burp右键菜单
+		} else {
+			tabbedWrapper.setEnabled(true);
+			int size = tabbedWrapper.getTabCount();
+			tabbedWrapper.removeTabAt(size - 1);
+			tabbedWrapper.setSelectedIndex(0);
+			ConfigManager.setConfigValue(ConfigName.showBurpMenu, true);//显示右键菜单
 		}
 	}
 
-
-
-
-	/**
-	 * 加载数据库文件：
-	 * 1、加载target对象到DomainPanel中的table内
-	 * 2、加载domainManager对象到DomainPanel中的文本框
-	 * 3、加载Title数据到TitlePanel
-	 * @param dbFilePath
-	 */
-	public boolean loadDataBase(String dbFilePath){
-		try {//这其中的异常会导致burp退出
-			System.out.println("=================================");
-			System.out.println("==Start Loading Data From: " + dbFilePath+" "+Commons.getNowTimeString()+"==");
-			BurpExtender.getStdout().println("==Start Loading Data From: " + dbFilePath+" "+Commons.getNowTimeString()+"==");
-			currentDBFile = new File(dbFilePath);
-			if (!currentDBFile.exists()){
-				BurpExtender.getStdout().println("==Load database file [" + dbFilePath+"] failed,file does not exist "+Commons.getNowTimeString()+"==");
-				return false;
-			}
-
-			domainPanel.LoadTargetsData(currentDBFile.toString());
-			domainPanel.LoadDomainData(currentDBFile.toString());
-			titlePanel.loadData(currentDBFile.toString());
-
-			displayProjectName();
-			System.out.println("==End Loading Data From: "+ dbFilePath+" "+Commons.getNowTimeString() +"==");//输出到debug console
-			BurpExtender.getStdout().println("==End Loading Data From: "+ dbFilePath+" "+Commons.getNowTimeString() +"==");
-			return true;
-		} catch (Exception e) {
-			BurpExtender.getStdout().println("Loading Failed!");
-			e.printStackTrace();//输出到debug console
-			e.printStackTrace(BurpExtender.getStderr());
-			return false;
-		}
-	}
-
-	//显示项目名称，加载多个该插件时，进行区分，避免混淆
-	public void displayProjectName() {
-		if (domainPanel.getDomainResult() !=null){
-			String name = currentDBFile.getName();
-			//String newName = String.format(BurpExtender.getFullExtenderName()+" [%s]",name);
-			//v2021.8的版本中，邮件菜单会用到插件名称，所以减小名称的长度
-			String newName = String.format(BurpExtender.getExtenderName()+" [%s]",name);
-
-			BurpExtender.getCallbacks().setExtensionName(newName); //新插件名称
-			getProjectMenu().AddDBNameMenuItem(name);
-			getProjectMenu().AddDBNameTab(name);
-			//gui.repaint();//NO need
-		}
-	}
 
 	/*
-	使用数据模型监听后，不需再自行单独保存当前项目了。
-	但是需要用于另存为，单独保存域名(和saveDomainOnly) 2个功能。
-	都需要文件选择对话框
+    使用数据模型监听后，不需再自行单独保存当前项目了。
+    但是需要用于另存为，单独保存域名(和saveDomainOnly) 2个功能。
+    都需要文件选择对话框
 	 */
-	public Boolean saveData(String dbFilePath,boolean domainOnly) {
-		try{
-			if (dbFilePath != null && new File(dbFilePath).exists()){
+	public Boolean saveData(String dbFilePath, boolean domainOnly) {
+		try {
+			if (dbFilePath != null && new File(dbFilePath).exists()) {
 				DomainDao domainDao = new DomainDao(dbFilePath.toString());
 				TargetDao targetDao = new TargetDao(dbFilePath.toString());
 
@@ -266,27 +261,26 @@ public class GUIMain extends JFrame {
 				boolean domainSaved = domainDao.saveDomainManager(domainPanel.getDomainResult());
 
 				if (domainOnly) {
-					if ( targetSaved && domainSaved	) {
+					if (targetSaved && domainSaved) {
 						stdout.println("Save Domain Only Success! " + Commons.getNowTimeString());
 						return true;
 					}
 					return false;
-				}else {
-					TitleDao titleDao = new TitleDao(dbFilePath.toString());
-					boolean titleSaved  = titleDao.addOrUpdateTitles(getTitlePanel().getTitleTable().getLineTableModel().getLineEntries());
-					if (targetSaved && domainSaved && titleSaved){
-						stdout.println("Save Domain And Title Success! "+ Commons.getNowTimeString());
+				} else {
+					TitleDao titleDao = new TitleDao(dbFilePath);
+					boolean titleSaved = titleDao.addOrUpdateTitles(getTitlePanel().getTitleTable().getLineTableModel().getLineEntries());
+					if (targetSaved && domainSaved && titleSaved) {
+						stdout.println("Save Domain And Title Success! " + Commons.getNowTimeString());
 						return true;
 					}
 				}
 			}
 			return false;
-		}catch(Exception e1){
+		} catch (Exception e1) {
 			e1.printStackTrace(stderr);
 			return false;
 		}
 	}
-
 
 
 	/**
@@ -296,7 +290,7 @@ public class GUIMain extends JFrame {
 		EventQueue.invokeLater(new Runnable() {
 			public void run() {
 				try {
-					GUIMain frame = new GUIMain(null);
+					GUIMain frame = new GUIMain();
 					frame.setVisible(true);
 				} catch (Exception e) {
 					e.printStackTrace();

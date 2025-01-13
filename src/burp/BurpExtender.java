@@ -8,31 +8,40 @@ import java.util.List;
 import javax.swing.JMenuItem;
 import javax.swing.SwingUtilities;
 
+import config.DataLoadManager;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
+import com.bit4woo.utilbox.burp.HelperPlus;
+
 import GUI.GUIMain;
 import bsh.This;
+import config.ConfigManager;
+import config.ConfigName;
 import config.ConfigPanel;
-import config.DataLoadManager;
 
 public class BurpExtender implements IBurpExtender, ITab, IExtensionStateListener, IContextMenuFactory, IHttpListener {
 	/**
 	 *
 	 */
 	private static IBurpExtenderCallbacks callbacks;
+	private static IExtensionHelpers helpers;
+	private static HelperPlus helperPlus;
+
 	private static PrintWriter stdout;
 	private static PrintWriter stderr;
 	private static String ExtenderName = "Domain Hunter Pro";
 	private static String Version = This.class.getPackage().getImplementationVersion();
 	private static String Author = "by bit4woo";
 	private static String github = "https://github.com/bit4woo/domain_hunter_pro";
-	private static final String Extension_Setting_Name_Line_Config = "domain-Hunter-pro-line-config";
 	private static final String Extension_Setting_Name_DB_File = "DomainHunterProDbFilePath";
-	private static final Logger log = LogManager.getLogger(BurpExtender.class);
 
-	private GUIMain gui;
-
+	private static GUIMain gui;
+	private static DataLoadManager dataLoadManager;
+	// 通常情况下，当使用了静态变量，多个实例之间对静态变量的修改会相互影响，见src/test/StaticFieldTest.java
+	// 然而为了快捷访问某些对象（通过类名称访问很直接），又会常常使用静态变量。
+	// 好消息是：burp的插件机制是每个插件实例都由独立的类加载器加载，保证了插件之间的相互隔离。也就是说，使用了静态变量也没有关系。
+	// 后续解决方案：创建一个context对象，各个对象构造函数都传递这个context对象。当要访问某个对象时，就通过context对象进行访问。
 
 	public static PrintWriter getStdout() {
 		//不同的时候调用这个参数，可能得到不同的值
@@ -61,10 +70,21 @@ public class BurpExtender implements IBurpExtender, ITab, IExtensionStateListene
 		return github;
 	}
 
-	public GUIMain getGui() {
+	public static IExtensionHelpers getHelpers() {
+		return helpers;
+	}
+
+	public static HelperPlus getHelperPlus() {
+		return helperPlus;
+	}
+
+	public static GUIMain getGui() {
 		return gui;
 	}
 
+	public static DataLoadManager getDataLoadManager(){
+		return dataLoadManager;
+	}
 	public static String getExtenderName() {
 		return ExtenderName;
 	}
@@ -75,39 +95,12 @@ public class BurpExtender implements IBurpExtender, ITab, IExtensionStateListene
 	}
 
 
-	@Deprecated
-	public void saveDBfilepathToExtension() {
-		//to save domain result to extensionSetting
-		//仅仅存储sqllite数据库的名称,也就是domainResult的项目名称
-		if (gui.getCurrentDBFile() != null) {
-			String dbfilepath = gui.getCurrentDBFile().getAbsolutePath();
-			stdout.println("Saving Current DB File Path To Disk: " + dbfilepath);
-			System.out.println("Loaded DB File Path From Disk: " + dbfilepath);
-			callbacks.saveExtensionSetting(Extension_Setting_Name_DB_File, dbfilepath);
-		}
-	}
-
-	/**
-	 * 很多时候都获取不到数据，都是null值！有bug
-	 *
-	 * @return
-	 */
-	@Deprecated
-	public static String loadDBfilepathFromExtension() {
-		String dbfilepath = callbacks.loadExtensionSetting(Extension_Setting_Name_DB_File);
-		if (dbfilepath == null) {
-			//dbfilepath = LineConfig.loadFromDisk().getDbfilepath();
-		}
-		stdout.println("Loaded DB File Path From Disk: " + dbfilepath);
-		System.out.println("Loaded DB File Path From Disk: " + dbfilepath);
-		return dbfilepath;
-	}
-
-
 	//插件加载过程中需要做的事
 	@Override
 	public void registerExtenderCallbacks(IBurpExtenderCallbacks callbacks) {
 		BurpExtender.callbacks = callbacks;
+		BurpExtender.helpers = callbacks.getHelpers();
+		BurpExtender.helperPlus = new HelperPlus(helpers);
 
 		getStdout();
 		getStderr();
@@ -121,11 +114,12 @@ public class BurpExtender implements IBurpExtender, ITab, IExtensionStateListene
 
 		SwingUtilities.invokeLater(new Runnable() {//create GUI
 			public void run() {
-				gui = new GUIMain(BurpExtender.this);
+				gui = new GUIMain();
+				dataLoadManager = DataLoadManager.loadFromDisk(gui);
 				callbacks.addSuiteTab(BurpExtender.this);
 				//这里的BurpExtender.this实质是指ITab对象，也就是getUiComponent()中的contentPane.这个参数由GUI()函数初始化。
 				//如果这里报java.lang.NullPointerException: Component cannot be null 错误，需要排查contentPane的初始化是否正确。
-				gui.getDataLoadManager().loadDbAndConfig();
+				dataLoadManager.loadDbAndConfig();
 				gui.startLiveCapture();
 			}
 		});
@@ -133,11 +127,22 @@ public class BurpExtender implements IBurpExtender, ITab, IExtensionStateListene
 
 	@Override
 	public void extensionUnloaded() {
-		gui.getDataLoadManager().unloadDbfile(null);
-		gui.stopLiveCapture();
+		
+		try {
+			if (dataLoadManager != null) {
+				dataLoadManager.unloadDbfile(null);
+			}
+		} catch (Exception e) {
+			e.printStackTrace(stderr);
+		}
+		
+		try {
+			gui.stopLiveCapture();
+		} catch (Exception e) {
+			e.printStackTrace(stderr);
+		}
 
 		try {//避免这里错误导致保存逻辑的失效
-			gui.getProjectMenu().remove();
 			if (gui.getTitlePanel().getThreadGetTitle() != null) {
 				gui.getTitlePanel().getThreadGetTitle().interrupt();//maybe null
 				gui.getInputQueue().clear();
@@ -149,9 +154,11 @@ public class BurpExtender implements IBurpExtender, ITab, IExtensionStateListene
 		}
 
 		try {
-			gui.getDataLoadManager().saveCurrentConfig(null);
+			if (dataLoadManager != null) {
+				dataLoadManager.saveCurrentConfig(null);
+			}
 		} catch (Exception e) {
-			e.printStackTrace();
+			e.printStackTrace(stderr);
 		}
 	}
 
@@ -168,7 +175,7 @@ public class BurpExtender implements IBurpExtender, ITab, IExtensionStateListene
 
 	@Override
 	public List<JMenuItem> createMenuItems(IContextMenuInvocation invocation) {
-		if (ConfigPanel.DisplayContextMenuOfBurp.isSelected()) {
+		if (ConfigManager.getBooleanConfigByKey(ConfigName.showBurpMenu)) {
 			return new LineEntryMenuForBurp(gui).createMenuItemsForBurp(invocation);
 		} else {
 			return null;

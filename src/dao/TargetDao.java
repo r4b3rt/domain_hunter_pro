@@ -21,27 +21,36 @@ public class TargetDao {
 	public TargetDao(String dbFilePath){
 		dataSource = DBUtils.getSqliteDataSource(dbFilePath);
 		jdbcTemplate = new JdbcTemplate(dataSource);
-		if (!testSelect()){
+		if (!tableExists("TargetTable")){
 			createTable();
+		}else {
+			alterTable();
 		}
 	}
 	
 	public TargetDao(File dbFilePath){
 		this(dbFilePath.toString());
 	}
-
-	public boolean createTable() {
+	
+	public String genCreateTableSql(String tableName) {
 		//使用和旧版本不同的表名称,避免冲突
-		String sqlTitle = "CREATE TABLE IF NOT EXISTS TargetTable" +
+		String createTableSql = "CREATE TABLE IF NOT EXISTS " + tableName +" "+
 				"(ID INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL," +//自动增长 https://www.sqlite.org/autoinc.html
-				" target           TEXT    NOT NULL," +
+				" target           TEXT    NOT NULL UNIQUE," + // -- UNIQUE关键词 为 target 字段添加唯一约束，这样INSERT OR REPLACE语句才能根据这段进行
 				" type        TEXT    NOT NULL,"+
 				" keyword        TEXT    NOT NULL,"+
 				" ZoneTransfer        BOOLEAN    NOT NULL,"+
-				" isBlack        BOOLEAN    NOT NULL,"+
+				//" isBlack        BOOLEAN    NOT NULL,"+
+				" trustLevel        TEXT    NOT NULL,"+
 				" comment        TEXT    NOT NULL,"+
-				" useTLD        BOOLEAN    NOT NULL)";
-		jdbcTemplate.execute(sqlTitle);
+				" useTLD        BOOLEAN    NOT NULL,"+ 
+				" subDomainCount	INTEGER)";
+		return createTableSql;
+	}
+
+	public boolean createTable() {
+
+		jdbcTemplate.execute(genCreateTableSql("TargetTable"));
 		
 		//https://www.sqlitetutorial.net/sqlite-replace-statement/
 		//让target字段成为replace操作判断是否重复的判断条件。
@@ -50,20 +59,150 @@ public class TargetDao {
 		return true;
 	}
 	
+	public void alterTable() {
+		removeColumnIsBlackIfPresent();
+		AddSubDomainCount();
+	}
+	
 	/**
-	 * 
-	 * @param entry
+	 * 实现：删除isBlack字段，新增trustLevel字段的逻辑。需要确保旧表有isBlack字段。
 	 * @return
 	 */
-	public boolean addOrUpdateTarget(TargetEntry entry){
-		String sql = "insert or replace into TargetTable (target,type,keyword,ZoneTransfer,isBlack,comment,useTLD)"
-					+ " values(?,?,?,?,?,?,?)";
+	public boolean removeColumnIsBlackIfPresent() {
+	    if (!columnExists("TargetTable", "isBlack")) {
+	        // 如果 isBlack 列不存在，直接返回
+	        return true;
+	    }
 
-		int result = jdbcTemplate.update(sql, entry.getTarget(),entry.getType(),entry.getKeyword(),entry.isZoneTransfer(),
-				entry.isBlack(),SetAndStr.toStr(entry.getComments()),entry.isUseTLD());
+	    String createNewTableSql = genCreateTableSql("TargetTable_new");
+	    
+	    //org.sqlite.SQLiteException: [SQLITE_CONSTRAINT_UNIQUE] A UNIQUE constraint failed (UNIQUE constraint failed: TargetTable_new.target)
+	    String copyDataSql = "INSERT OR IGNORE INTO TargetTable_new (ID, target, type, keyword, ZoneTransfer, comment, useTLD, trustLevel) " +
+	            "SELECT ID, target, type, keyword, ZoneTransfer, comment, useTLD, " +
+	            "CASE WHEN isBlack = 1 THEN 'NonTarget' ELSE 'Maybe' END as trustLevel " +
+	            "FROM TargetTable";
+	    
+	    String dropOldTableSql = "DROP TABLE TargetTable";
+	    
+	    String renameTableSql = "ALTER TABLE TargetTable_new RENAME TO TargetTable";
+	    
+	    String sqlcreateIndex = "CREATE UNIQUE INDEX IF NOT EXISTS idx_Target_target ON TargetTable (target)";
+	    try {
+	        jdbcTemplate.execute(createNewTableSql);
+	        jdbcTemplate.execute(copyDataSql);
+	        jdbcTemplate.execute(dropOldTableSql);
+	        jdbcTemplate.execute(renameTableSql);
+	        jdbcTemplate.execute(sqlcreateIndex);
+	        return true;
+	    } catch (DataAccessException e) {
+	        e.printStackTrace();
+	        return false;
+	    }
+	}
+	
+	/**
+	 * 实现：删除isBlack字段，新增trustLevel字段的逻辑。需要确保旧表有isBlack字段。
+	 * @return
+	 */
+	public boolean AddSubDomainCount() {
+	    if (columnExists("TargetTable", "subDomainCount")) {
+	        // 如果 subDomainCount 列存在，表面是最新的表结构，直接返回
+	        return true;
+	    }
 
+	    String createNewTableSql = genCreateTableSql("TargetTable_new");
+	    
+	    String copyDataSql = "INSERT OR IGNORE INTO TargetTable_new (ID, target, type, keyword, ZoneTransfer, comment, useTLD, trustLevel) " +
+	            "SELECT ID, target, type, keyword, ZoneTransfer, comment, useTLD, trustLevel " +
+	            "FROM TargetTable";
+	    
+	    String dropOldTableSql = "DROP TABLE TargetTable";
+	    
+	    String renameTableSql = "ALTER TABLE TargetTable_new RENAME TO TargetTable";
+	    
+	    String sqlcreateIndex = "CREATE UNIQUE INDEX IF NOT EXISTS idx_Target_target ON TargetTable (target)";
+	    try {
+	        jdbcTemplate.execute(createNewTableSql);
+	        jdbcTemplate.execute(copyDataSql);
+	        jdbcTemplate.execute(dropOldTableSql);
+	        jdbcTemplate.execute(renameTableSql);
+	        jdbcTemplate.execute(sqlcreateIndex);
+	        return true;
+	    } catch (DataAccessException e) {
+	        e.printStackTrace();
+	        return false;
+	    }
+	}
+
+	private boolean columnExists(String tableName, String columnName) {
+	    try {
+	        String sql = "PRAGMA table_info(" + tableName + ")";
+	        SqlRowSet rowSet = jdbcTemplate.queryForRowSet(sql);
+	        while (rowSet.next()) {
+	            if (columnName.equals(rowSet.getString("name"))) {
+	                return true;
+	            }
+	        }
+	    } catch (DataAccessException e) {
+	        e.printStackTrace();
+	    }
+	    return false;
+	}
+
+	public boolean tableExists(String tableName){
+		try {
+			String sql = "SELECT count(*) FROM sqlite_master WHERE type='table' AND name = '"+tableName+"'";
+			SqlRowSet result = jdbcTemplate.queryForRowSet(sql);
+			if (result.next() && result.getInt(1) > 0) {
+				return true;
+			} else {
+				return false;
+			}
+		} catch (DataAccessException e) {
+			e.printStackTrace();
+			return false;
+		}
+	}
+
+	
+	/**
+	 * 不再使用isBlack字段，由trustLevel字段代替
+	 * @param entry
+	 * @return
+	 * 
+	 * insert or replace 的工作机制:
+		查找匹配主键 或者 唯一约束列 的记录。
+		如果找到匹配记录，则删除这条记录，然后插入新的记录。
+		如果没有匹配记录，则直接插入新的记录。
+		由于删除后再插入的过程会生成新的记录，因此数据实际上是“创建了新的记录”，而不是直接修改现有记录。
+	 */
+	@Deprecated
+	public boolean addOrUpdateTarget_old(TargetEntry entry) {
+	    String sql = "insert or replace into TargetTable (target, type, keyword, ZoneTransfer, comment, useTLD, trustLevel,subDomainCount)"
+	            + " values(?, ?, ?, ?, ?, ?, ?,?)" ;
+	   
+
+	    int result = jdbcTemplate.update(sql, entry.getTarget(), entry.getType(), entry.getKeyword(), entry.isZoneTransfer(),
+	            SetAndStr.toStr(entry.getComments()), entry.isUseTLD(), 
+	            entry.getTrustLevel(),entry.getSubdomainCount());
+
+	    return result > 0;
+	}
+	
+	public boolean addOrUpdateTarget(TargetEntry entry) {
+		String sql = "INSERT INTO TargetTable (target, type, keyword, ZoneTransfer, comment, useTLD, trustLevel, subDomainCount)"
+		        + " VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
+		        + " ON CONFLICT(target) DO UPDATE SET type = excluded.type, keyword = excluded.keyword, "
+		        + " ZoneTransfer = excluded.ZoneTransfer, comment = excluded.comment, "
+		        + " useTLD = excluded.useTLD, trustLevel = excluded.trustLevel, subDomainCount = excluded.subDomainCount";
+	
+		int result = jdbcTemplate.update(sql, entry.getTarget(), entry.getType(), entry.getKeyword(), entry.isZoneTransfer(),
+		        SetAndStr.toStr(entry.getComments()), entry.isUseTLD(), entry.getTrustLevel(), entry.getSubdomainCount());
+	
 		return result > 0;
 	}
+
+
 	
 	public boolean addOrUpdateTargets(List<TargetEntry> entries){
 		int num=0;
@@ -91,7 +230,8 @@ public class TargetDao {
 	 * @return
 	 */
 	public List<TargetEntry> selectAll(){
-		String sql = "select * from TargetTable";
+		String sql = "select * from TargetTable order by ID";
+		//在SQL中，如果你没有显式地指定排序规则（使用ORDER BY子句），那么结果的顺序是不确定的
 		return jdbcTemplate.query(sql,new TargetMapper());
 	}
 
@@ -131,22 +271,9 @@ public class TargetDao {
 			return null;
 		}
 	}
-	
-	public boolean testSelect(){
-		try {
-			//String sql = "select * from TargetTable limit 1";
-			String sql = "SELECT count(*) FROM sqlite_master WHERE type='table' AND name = 'TargetTable'";
-			SqlRowSet result = jdbcTemplate.queryForRowSet(sql);
-			if (result.getRow() > 0 && result.getInt(0) > 0) {
-				return true;
-			}else {
-				return false;
-			}
-		} catch (DataAccessException e) {
-			e.printStackTrace();
-			return false;
-		}
-	}
+
+
+
 	
 	/**
 	 * 

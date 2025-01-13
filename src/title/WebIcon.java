@@ -12,14 +12,24 @@ import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 
 import javax.imageio.ImageIO;
 
+import org.apache.commons.io.FileUtils;
+import org.apache.commons.lang3.StringUtils;
+import org.jsoup.Jsoup;
+import org.jsoup.nodes.Document;
+import org.jsoup.nodes.Entities;
+import org.jsoup.parser.Parser;
+
+import com.bit4woo.utilbox.burp.HelperPlus;
+import com.bit4woo.utilbox.utils.TextUtils;
 import com.github.kevinsawicki.http.HttpRequest;
 import com.google.common.hash.Hashing;
 
 import burp.BurpExtender;
-import burp.HelperPlus;
 import burp.IExtensionHelpers;
 import burp.IHttpRequestResponse;
 import burp.IHttpService;
@@ -42,12 +52,14 @@ public class WebIcon {
 			int port = url.getPort() == -1 ? url.getDefaultPort() : url.getPort();
 			IHttpService service = helpers.buildHttpService(url.getHost(), port, url.getProtocol());
 			IHttpRequestResponse info = BurpExtender.getCallbacks().makeHttpRequest(service, requsetbyte);
-			HelperPlus getter = new HelperPlus(helpers);
+			HelperPlus getter = BurpExtender.getHelperPlus();
 			int status = getter.getStatusCode(info);
 			String ContentType = getter.getHeaderValueOf(false, info, "Content-Type");
-			if (status == 200 && ContentType != null && ContentType.toLowerCase().startsWith("image/")) {
+			if (status == 200 && ContentType != null &&
+					(ContentType.toLowerCase().startsWith("image/") || ContentType.toLowerCase().contains("octet-stream"))) {
 				// Content-Type: image/x-icon
-				byte[] body = getter.getBody(false, info);// 这里不能使用静态方法。
+				// Content-Type: binary/octet-stream 有的图片存储在OSS上的
+				byte[] body = HelperPlus.getBody(false, info);// 这里不能使用静态方法。
 				return body;
 			}
 		} catch (MalformedURLException e) {
@@ -58,14 +70,24 @@ public class WebIcon {
 
 	public static String getFaviconUrl(String urlStr, String html) {
 		String iconUrl = FaviconExtractor(html);
-		if (iconUrl.startsWith("/")) {
-			String baseUrl = getBaseUrl(urlStr);
-			String url = baseUrl + FaviconExtractor(html);
-			return url;
+
+		String baseUrl = getBaseUrl(urlStr);
+		String parentUrl = urlStr.substring(0, urlStr.lastIndexOf('/') + 1);
+		String protocol = urlStr.substring(0, urlStr.indexOf("//"));
+
+		try {
+			new URL(iconUrl); //本来就是一个单独的URL
+			return iconUrl;
+		} catch (MalformedURLException e) {
+
+		}
+
+		if (iconUrl.startsWith("//")) {
+			return protocol + iconUrl;
+		}else if (iconUrl.startsWith("/")) {
+			return baseUrl + iconUrl;
 		}else {
-			String parentUrl = urlStr.substring(0, urlStr.lastIndexOf('/') + 1);
-			String url = parentUrl + FaviconExtractor(html);
-			return url;
+			return parentUrl + iconUrl;
 		}
 	}
 
@@ -79,7 +101,7 @@ public class WebIcon {
 		if (new String(imageData).toLowerCase().contains("<html>")) {
 			return "";
 		}
-		return calcHash(imageData) + "";
+		return calcHash(imageData) + "|"+calcMd5Hash(imageData);
 
 	}
 
@@ -89,14 +111,20 @@ public class WebIcon {
 		return getHash(imageData);
 	}
 
-	public static String FaviconExtractor(String html) {
+	//	<link rel="icon" href="./logo.png">
+	//	<link rel="icon" href="logo.png">
+	//	<link rel="shortcut icon" href="//p3-x.xx.com/obj/xxx/favicon.ico">
+	//	<link rel='icon' href='/favicon.ico' type='image/x-ico'/>
+	//	<link href="/resources/admin-favicon.ico" rel="shortcut icon" type="image/x-ico"/>
+	//	<link href="/resources/admin-favicon.ico" rel="icon" type="image/x-ico"/>
+	public static String FaviconExtractor_old(String html) {
 		String faviconPath = "/favicon.ico"; // 默认值
 
-		if (html == null || html.equals("")) {
+		if (StringUtils.isEmpty(html)) {
 			return faviconPath;
 		}
-
-		String regex = "<link\\s+rel=(?:\"shortcut\\s+)?icon\"\\s+href=\"([^\"]+)\"";
+		String regex = "<link\\s+rel=[\"|\'][shortcut\\s+]*icon[\"|\']\\s+href=[\"|\'](.*?)[\"|\']";
+		//String regex = "icon\"\\s+href=\"(.*?)\">";
 		Pattern pattern = Pattern.compile(regex);
 		Matcher matcher = pattern.matcher(html);
 
@@ -104,6 +132,80 @@ public class WebIcon {
 			faviconPath = matcher.group(1);
 		}
 		return faviconPath;
+	}
+
+	/**
+		<link rel="icon" href="./logo.png">
+		<link rel="icon" href="logo.png">
+		<link rel="shortcut icon" href="//p3-x.xx.com/obj/xxx/favicon.ico">
+		<link rel='icon' href='/favicon.ico' type='image/x-ico'/>
+		<link href="/resources/admin-favicon.ico" rel="shortcut icon" type="image/x-ico"/>
+		<link href="/resources/admin-favicon.ico" rel="icon" type="image/x-ico"/>
+	 * @param html
+	 * @return
+	 */
+	public static String FaviconExtractor(String html) {
+		String faviconPath = "/favicon.ico"; // 默认值
+
+		if (StringUtils.isEmpty(html)) {
+			return faviconPath;
+		}
+
+		html = formatHtmlAndGetHead(html);
+		for (String line:html.split("\n|>")){
+			String line_lower = line.toLowerCase();
+			//System.out.println(line);
+			if (line_lower.contains("<link") && line_lower.contains("rel=") && line_lower.contains("icon")) {
+				String regex = "href=[\"|\'](.*?)[\"|\']";
+				Pattern pattern = Pattern.compile(regex);
+				Matcher matcher = pattern.matcher(line);
+				while (matcher.find()) {
+					faviconPath = matcher.group(1);
+					return faviconPath;
+				}
+			}
+			if (line_lower.contains("</head>")) {
+				return faviconPath;
+			}
+		}
+		return faviconPath;
+	}
+
+
+	public static String formatHtmlAndGetHead(String unformattedHtml) {
+		String head = "";
+		try {
+			// 使用JSoup解析HTML
+			Document document = Jsoup.parse(unformattedHtml, "", Parser.xmlParser());
+
+			// 设置输出格式，即进行美化
+			document.outputSettings().prettyPrint(true);
+
+			// 设置转义实体，避免特殊字符被转义
+			document.outputSettings().escapeMode(Entities.EscapeMode.xhtml);
+
+			// 获取HTML的<head>元素
+			org.jsoup.nodes.Element headElement = document.head();
+
+			// 返回<head>元素的内容
+			head = headElement.html();
+			if (head.contains("icon")){
+				return head;
+			}
+		} catch (Exception e) {
+			// TODO Auto-generated catch block
+			e.printStackTrace();
+		}
+
+		try {
+			List<String> heads = TextUtils.grepBetween("<head", "</head", unformattedHtml);
+			if (heads.size()>0){
+				head = heads.get(0);
+			}
+		} catch (Exception e) {
+			e.printStackTrace();
+		}
+		return head;
 	}
 
 	/**
@@ -150,6 +252,27 @@ public class WebIcon {
 				.asInt();
 		return hashvalue;
 	}
+	
+    public static String calcMd5Hash(byte[] content) {
+        try {
+            // 创建 MD5 哈希对象
+            MessageDigest md = MessageDigest.getInstance("MD5");
+            
+            // 更新哈希内容
+            md.update(content);
+            
+            // 计算哈希值并转换为十六进制字符串
+            byte[] hashBytes = md.digest();
+            StringBuilder hexString = new StringBuilder();
+            for (byte b : hashBytes) {
+                hexString.append(String.format("%02x", b));
+            }
+            
+            return hexString.toString();
+        } catch (NoSuchAlgorithmException e) {
+            throw new RuntimeException("MD5 algorithm not found", e);
+        }
+    }
 
 	public static byte[] imageToByteArray(String imagePath) throws IOException {
 		File file = new File(imagePath);
@@ -162,7 +285,7 @@ public class WebIcon {
 	}
 
 	public static byte[] convertIcoToPng(byte[] icoBytes) {
-		if (icoBytes == null) {
+		if (icoBytes == null || icoBytes.length==0) {
 			return new byte[0];
 		}
 		if (isPNG(icoBytes)) {
@@ -201,8 +324,11 @@ public class WebIcon {
 		return true;
 	}
 
-	public static void main(String[] args) {
+	public static void main(String[] args) throws IOException {
 		// System.out.println(getHash("https://www.baidu.com"));
-		System.out.println(getHash("https://www.baidu.com", ""));
+		//System.out.print(FaviconExtractor("<link rel='icon' href='/xxx-favicon.ico' type='image/x-ico'/>"));
+		byte[] aaa = FileUtils.readFileToByteArray(
+				new File("G:/tmp/baidu.bea6c3bf.png"));
+		System.out.println(calcMd5Hash(aaa));
 	}
 }

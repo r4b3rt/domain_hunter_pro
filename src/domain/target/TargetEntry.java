@@ -9,24 +9,29 @@ import java.util.List;
 import java.util.Set;
 
 import org.apache.commons.io.FileUtils;
+import org.apache.commons.lang3.StringUtils;
+import org.apache.commons.validator.routines.EmailValidator;
 
 import com.alibaba.fastjson.JSON;
+import com.bit4woo.utilbox.utils.DomainUtils;
+import com.bit4woo.utilbox.utils.IPAddressUtils;
 import com.google.common.net.InternetDomainName;
 
 import base.Commons;
 import burp.BurpExtender;
-import utils.DomainNameUtils;
-import utils.IPAddressUtils;
+import domain.DomainManager;
 
 public class TargetEntry {
 	private String target = "";//根域名、网段、或者IP
 	private String type = "";
 	private String keyword = "";
-	private Set<String> AuthoritativeNameServers = new HashSet<String>();
-	private boolean ZoneTransfer = false;//域名对应的权威服务器，是否域于传送漏洞
-	private boolean isBlack = false;//这个域名是否是黑名单根域名，需要排除的
-	private Set<String> comments = new HashSet<String>();
+	private Set<String> AuthoritativeNameServers = new HashSet<>();//权威服务器
+	private boolean ZoneTransfer = false;//域名对应的权威服务器，是否存在域于传送漏洞
+	private transient boolean isBlack = false;//这个域名是否是黑名单根域名，需要排除的。不再使用这个字段，由trustLevel代替
+	private Set<String> comments = new HashSet<>();
 	private boolean useTLD = true;//TLD= Top-Level Domain,比如 baidu.com为true，*.m.baidu.com为false
+	private String trustLevel = AssetTrustLevel.Maybe;
+	private int subdomainCount = 0;
 
 	public static final String Target_Type_Domain = "Domain";
 	public static final String Target_Type_Wildcard_Domain = "WildcardDomain"; //
@@ -35,6 +40,7 @@ public class TargetEntry {
 
 	private static final String[]  TargetTypeArray = {Target_Type_Domain,Target_Type_Wildcard_Domain,Target_Type_Subnet};
 	public static List<String> TargetTypeList = new ArrayList<>(Arrays.asList(TargetTypeArray));
+	
 
 	public static void main(String[] args) {
 		TargetEntry aa = new TargetEntry("www.baidu.com");
@@ -48,41 +54,73 @@ public class TargetEntry {
 	public TargetEntry(String input) {
 		this(input,true);
 	}
-
+	
+	public TargetEntry(String input,boolean autoSub,String trustLevel,String comment) {
+		this(input,autoSub);
+		if (AssetTrustLevel.getLevelList().contains(trustLevel) && !this.trustLevel.equals(AssetTrustLevel.Cloud)) {
+			this.setTrustLevel(trustLevel);
+		}else {
+			//已经有默认初始值了，无需再设置
+		}
+		addComment(comment);
+	}
+	
+	public TargetEntry(String input,boolean autoSub,String trustLevel) {
+		this(input,autoSub);
+		if (AssetTrustLevel.getLevelList().contains(trustLevel)) {
+			this.setTrustLevel(trustLevel);
+		}else {
+			//已经有默认初始值了，无需再设置
+		}
+	}
+	
+	private void autoDetectTrustLevel() {
+		//resources/cloud_service_domain_names.txt
+		String domains = "aliyun.com\r\n"
+				+ "aliyuncs.com\r\n"
+				+ "amazon.com\r\n"
+				+ "amazonaws.com\r\n"
+				+ "huaweicloud.com\r\n"
+				+ "myhuaweicloud.com\r\n"
+				+ "hwclouds-dns.com\r\n"
+				+ "myqcloud.com\r\n"
+				+ "tencent.com\r\n"
+				+ "tencentcloudapi.com\r\n"
+				+ "cloudfront.net";
+		for (String item:domains.split("\r\n")) {
+			if (target.toLowerCase().trim().endsWith(item)) {
+				this.setTrustLevel(AssetTrustLevel.Cloud);
+				break;
+			}
+		}
+	}
 
 	public TargetEntry(String input,boolean autoSub) {
 
-		String domain = DomainNameUtils.clearDomainWithoutPort(input);
-		if (DomainNameUtils.isValidDomain(domain)) {
+		String domain = DomainUtils.clearDomainWithoutPort(input);
+
+		if (EmailValidator.getInstance().isValid(domain)){
+			domain = domain.substring(domain.indexOf("@")+1);
+		}
+
+		if (DomainUtils.isValidDomainNoPort(domain)) {
 			type = Target_Type_Domain;
 
 			useTLD = autoSub;
 			if (autoSub) {
-				target = DomainNameUtils.getRootDomain(domain);
+				target = DomainUtils.getRootDomain(domain);
 			}else{
 				target = domain;
 			}
 			keyword = target.substring(0, target.indexOf("."));
-
-			/**
-			 * 假如用户手动编辑了target。那么就需要依靠刷新的操作来更新数据。所以单纯靠添加时的处理逻辑是不够的。
-			try {
-				DomainPanel.getDomainResult().getSubDomainSet().add(domain);
-				DomainPanel.getDomainResult().getRelatedDomainSet().remove(domain);//刷新时不操作相关域名集合，所有要有删除操作。
-			} catch (Exception e) {
-				e.printStackTrace();
-			}*/
-		}
-		else if (IPAddressUtils.isValidSubnet(domain)) {
+		} else if (IPAddressUtils.isValidSubnet(domain)) {
 			type = Target_Type_Subnet;
 			target = domain;
-		}
-
-		/**需要将它改造为正则表达式，去匹配域名
-		 * seller.*.example.*
-		 * seller.*.example.*
-		 */
-		else if (DomainNameUtils.isValidWildCardDomain(domain)) {
+		} else if (DomainUtils.isValidWildCardDomain(domain)) {
+			/**需要将它改造为正则表达式，去匹配域名
+			 * seller.*.example.*
+			 * seller.*.example.*
+			 */
 			type = Target_Type_Wildcard_Domain;
 			target = domain;
 
@@ -97,19 +135,8 @@ public class TargetEntry {
 			}else {
 				keyword = domainKeyword;
 			}
-
-			/**
-			 * 假如用户手动编辑了target。那么就需要依靠刷新的操作来更新数据。所以单纯靠添加时的处理逻辑是不够的。
-			HashSet<String> tmpSet = new HashSet<>(DomainPanel.getDomainResult().getRelatedDomainSet());
-			for (String tmp : tmpSet){
-				//replaceFirst的参数也是正则，能代替正则匹配？
-				if (DomainNameUtils.isMatchWildCardDomain(domain,tmp)){
-					DomainPanel.getDomainResult().getSubDomainSet().add(tmp);
-					DomainPanel.getDomainResult().getRelatedDomainSet().remove(tmp);//刷新时不操作相关域名集合，所有要有删除操作。
-				}
-			}
-			*/
 		}
+		autoDetectTrustLevel();
 	}
 
 
@@ -150,12 +177,21 @@ public class TargetEntry {
 	public void setZoneTransfer(boolean zoneTransfer) {
 		ZoneTransfer = zoneTransfer;
 	}
+	
+	@Deprecated
 	public boolean isBlack() {
 		return isBlack;
 	}
+	
+	@Deprecated
 	public void setBlack(boolean isBlack) {
 		this.isBlack = isBlack;
 	}
+	
+	public boolean isNotTarget() {
+		return trustLevel.equalsIgnoreCase(AssetTrustLevel.NonTarget);
+	}
+	
 	public Set<String> getComments() {
 		return comments;
 	}
@@ -165,7 +201,7 @@ public class TargetEntry {
 	}
 
 	public void addComment(String commentToAdd) {
-		if (commentToAdd == null || commentToAdd.trim().equals("")) return;
+		if (StringUtils.isBlank(commentToAdd)) return;
 		comments.addAll(Arrays.asList(commentToAdd.split(",")));
 	}
 
@@ -177,13 +213,62 @@ public class TargetEntry {
 		this.useTLD = useTLD;
 	}
 
+	public String getTrustLevel() {
+		if (isBlack) {
+			//兼容旧版本
+			trustLevel = AssetTrustLevel.NonTarget;
+		}
+		return trustLevel;
+	}
+
+	public void setTrustLevel(String trustLevel) {
+		this.trustLevel = trustLevel;
+	}
+	
+	public String switchTrustLevel() {
+		return trustLevel =  AssetTrustLevel.getNextLevel(trustLevel);
+	}
+	
+
+	public int getSubdomainCount() {
+		return subdomainCount;
+	}
+
+	public void setSubdomainCount(int subdomainCount) {
+		this.subdomainCount = subdomainCount;
+	}
+	
+	
+	public void countSubdomain(Set<String> domains) {
+		this.subdomainCount = 0;
+		if (this.type.equals(Target_Type_Domain)) {
+			for (String domain:domains) {
+				if (domain.endsWith("." + this.target) || domain.equalsIgnoreCase(this.target)) {
+					this.subdomainCount++;
+				}
+			}
+		}
+		
+		if (this.type.equals(Target_Type_Wildcard_Domain)) {
+			for (String domain:domains) {
+				if (DomainUtils.isMatchWildCardDomain(this.target, domain)) {
+					this.subdomainCount++;
+				}
+			}
+		}
+
+		if (this.type.equals(Target_Type_Subnet)) {
+			this.subdomainCount =IPAddressUtils.toIPList(this.target).size();
+		}
+	}
+
 	public void zoneTransferCheck() {
 		String rootDomain = InternetDomainName.from(target).topPrivateDomain().toString();
-		AuthoritativeNameServers = DomainNameUtils.GetAuthoritativeNameServer(rootDomain,null);
+		AuthoritativeNameServers = new HashSet<>(DomainUtils.GetAuthServer(rootDomain,null));
 		
 		for (String Server : AuthoritativeNameServers) {
 			//stdout.println("checking [Server: "+Server+" Domain: "+rootDomain+"]");
-			List<String> Records = DomainNameUtils.ZoneTransferCheck(rootDomain, Server);
+			List<String> Records = DomainUtils.ZoneTransferCheck(rootDomain, Server);
 			if (Records.size() > 0) {
 				try {
 					//stdout.println("!!! "+Server+" is zoneTransfer vulnerable for domain "+rootDomain+" !");

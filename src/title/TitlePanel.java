@@ -22,7 +22,11 @@ import javax.swing.JSplitPane;
 import javax.swing.JTabbedPane;
 import javax.swing.JTextField;
 import javax.swing.border.EmptyBorder;
+import javax.swing.event.TableModelEvent;
+import javax.swing.event.TableModelListener;
 import javax.swing.table.TableRowSorter;
+
+import com.bit4woo.utilbox.utils.IPAddressUtils;
 
 import GUI.GUIMain;
 import base.IndexedHashMap;
@@ -32,12 +36,11 @@ import dao.TitleDao;
 import thread.ThreadGetSubnet;
 import thread.ThreadGetTitleWithForceStop;
 import title.search.SearchTextField;
-import utils.IPAddressUtils;
 
 public class TitlePanel extends JPanel {
 
 	/**
-	 * 
+	 *
 	 */
 	private static final long serialVersionUID = 1L;
 	private JPanel buttonPanel;
@@ -315,7 +318,7 @@ public class TitlePanel extends JPanel {
 	 * @return
 	 */
 	public Set<String> getCertainDomains() {
-		Set<String> targetsToReq = new HashSet<String>();
+		Set<String> targetsToReq = new HashSet<>();
 		targetsToReq.addAll(guiMain.getDomainPanel().getDomainResult().getSubDomainSet());
 		targetsToReq.addAll(guiMain.getDomainPanel().fetchTargetModel().fetchTargetIPSet());
 		targetsToReq.addAll(guiMain.getDomainPanel().getDomainResult().getIPSetOfCert());
@@ -328,7 +331,7 @@ public class TitlePanel extends JPanel {
 	 * @return
 	 */
 	public Set<String> getCustomDomains() {
-		Set<String> targetsToReq = new HashSet<String>();
+		Set<String> targetsToReq = new HashSet<>();
 		targetsToReq.addAll(guiMain.getDomainPanel().getDomainResult().getSpecialPortTargets());
 		targetsToReq.removeAll(guiMain.getDomainPanel().getDomainResult().getNotTargetIPSet());
 		return targetsToReq;
@@ -339,11 +342,13 @@ public class TitlePanel extends JPanel {
 	 * 根据所有已知域名获取title
 	 */
 	public void getAllTitle(){
-		guiMain.getDomainPanel().backupDB("before-getTitle");
+		guiMain.getProjectMenu().backupDB("before-getTitle");
 		//backup to history
 		BackupLineEntries = titleTable.getLineTableModel().getLineEntries();
 		//clear tableModel
 		LineTableModel titleTableModel = new LineTableModel(guiMain);//clear
+		//这里虽然构建了一个新的model，但是它对应的数据库文件没有变化，这导致原始数据还在数据库文件中，必须主动清除
+		titleTableModel.clearDataInDBFile();
 		loadData(titleTableModel);
 		//转移以前手动保存的记录
 		transferManualSavedItems();
@@ -359,7 +364,7 @@ public class TitlePanel extends JPanel {
 	 * 需要跑的IP集合 = 网段汇算结果-黑名单-已请求域名的IP集合
 	 */
 	public void getExtendTitle(){
-		guiMain.getDomainPanel().backupDB("before-getExtendTitle");
+		guiMain.getProjectMenu().backupDB("before-getExtendTitle");
 
 		Set<String> extendIPSet = titleTable.getLineTableModel().GetExtendIPSet(true,false);//排除CDN,私有IP会在后续流程中进行过滤
 		Set<String> hostsInTitle = titleTable.getLineTableModel().GetHostsWithSpecialPort();
@@ -375,7 +380,7 @@ public class TitlePanel extends JPanel {
 	 * setToRun = 子域名+确定的网段+证书IP-黑名单IP-已请求域名的IP集合
 	 */
 	public void getTitleOfNewDomain(){
-		guiMain.getDomainPanel().backupDB("before-getTitleOfNewDomain");
+		guiMain.getProjectMenu().backupDB("before-getTitleOfNewDomain");
 
 		Set<String> hostsInTitle = titleTable.getLineTableModel().GetHostsWithSpecialPort();
 
@@ -418,7 +423,7 @@ public class TitlePanel extends JPanel {
 			//stdout.println("删除私有IP");
 			for (String subnet :subnets) {
 				String tmp = subnet.split("/")[0];
-				if (IPAddressUtils.isPrivateIPv4(tmp)) {
+				if (IPAddressUtils.isPrivateIPv4NoPort(tmp)) {
 					result.remove(subnet);
 					//stdout.println("删除"+subnet);
 				}
@@ -442,8 +447,25 @@ public class TitlePanel extends JPanel {
 
 	private void loadData(LineTableModel titleTableModel){
 
-		TableRowSorter<LineTableModel> tableRowSorter = new TableRowSorter<LineTableModel>(titleTableModel);
+		//实现点击排序
+		TableRowSorter<LineTableModel> tableRowSorter = new TableRowSorter<>(titleTableModel);
 		titleTable.setRowSorter(tableRowSorter);
+
+		boolean enable =false;//deprecate这段代码
+		if (enable && titleTableModel != null && tableRowSorter != null) {
+			titleTableModel.addTableModelListener(new TableModelListener() {
+				@Override
+				public void tableChanged(TableModelEvent e) {
+					if (e.getType() == TableModelEvent.INSERT ||
+							e.getType() == TableModelEvent.DELETE ||
+							e.getType() == TableModelEvent.UPDATE) {
+						//addNewLineEntry中fireTablexxx经常发生越界错误，大概率是因为排序器和数据模型不同步导致的
+						tableRowSorter.modelStructureChanged(); // 更新排序器的视图，这会导致排序被重置，导致界面不停刷新，影响数据操作，Deprecated
+					}
+				}
+			});
+		}
+
 		titleTable.setModel(titleTableModel);
 		//IndexOutOfBoundsException size为0，为什么会越界？
 		//!!!注意：这里必须先setRowSorter，然后再setModel。否则就会出现越界问题。因为当setModel时，会触发数据变更事件，这个时候会调用Sorter。
@@ -452,6 +474,8 @@ public class TitlePanel extends JPanel {
 		//titleTable.setAutoCreateRowSorter(true);//这样应该也可以❎，
 		//这里设置后就进行了创建，创建过程会getModel这个时候新model还未设置呢，保险起见不使用这个方式
 		//titleTable.setModel(titleTableModel);
+
+
 
 		int row = titleTableModel.getLineEntries().size();
 		System.out.println(row+" title entries loaded from database file");
