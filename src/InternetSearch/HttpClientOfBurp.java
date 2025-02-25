@@ -1,17 +1,24 @@
-package assetSearch;
+package InternetSearch;
 
 import java.net.URL;
+import java.util.Date;
 
+import com.bit4woo.utilbox.burp.HelperPlus;
+
+import base.Commons;
 import burp.BurpExtender;
-import burp.HelperPlus;
 import burp.IBurpExtenderCallbacks;
 import burp.IExtensionHelpers;
 import burp.IHttpRequestResponse;
 import burp.IHttpService;
+import config.ConfigManager;
+import config.ConfigName;
+import title.LineEntry;
 
 
 public class HttpClientOfBurp {
-
+	
+	
 	public static IHttpService getHttpService(URL url) {
 		IBurpExtenderCallbacks callbacks = BurpExtender.getCallbacks();
 		IExtensionHelpers helpers = callbacks.getHelpers();
@@ -45,16 +52,35 @@ public class HttpClientOfBurp {
 		if (byteRequest == null) {
 			byteRequest = helpers.buildHttpRequest(url);//GET
 		}
+		
 
 		IHttpService service =getHttpService(url);
 		IHttpRequestResponse message = callbacks.makeHttpRequest(service, byteRequest);
-		HelperPlus getter = new HelperPlus(helpers);
+
+		HelperPlus getter = BurpExtender.getHelperPlus();
 		int code = getter.getStatusCode(message);
+		
+		if (ConfigManager.getBooleanConfigByKey(ConfigName.ApiReqToTitle)
+				|| code != 200) {
+			try {
+				//将debug请求存储到title中
+				LineEntry entry = new LineEntry(message);
+				entry.addComment("AssetInfo:"+Commons.TimeToString(new Date().getTime()));
+				BurpExtender.getGui().getTitlePanel().getTitleTable().getLineTableModel().addNewLineEntryWithTime(entry);
+			} catch (Exception e) {
+				e.printStackTrace();
+			}
+		}
+		
 		if (code != 200) {
-			BurpExtender.getStderr().print(new String(message.getResponse()));
 			return "";
 		}
 		byte[] byteBody = getter.getBody(false, message);
 		return new String(byteBody);
+	}
+	
+	
+	public static void main(String[] args) {
+		System.out.println(Commons.TimeToString(new Date().getTime()));
 	}
 }

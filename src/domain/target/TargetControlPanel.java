@@ -17,13 +17,14 @@ import javax.swing.SwingConstants;
 import javax.swing.SwingWorker;
 import javax.swing.border.LineBorder;
 
+import GUI.GUIMain;
 import burp.BurpExtender;
 import domain.DomainPanel;
 
 public class TargetControlPanel extends JPanel {
 	
 	JRadioButton rdbtnAddRelatedToRoot;
-	DomainPanel domainPanel;
+	GUIMain gui;
 	private JButton btnFresh;
 
 	public JRadioButton getRdbtnAddRelatedToRoot() {
@@ -34,8 +35,8 @@ public class TargetControlPanel extends JPanel {
 		this.rdbtnAddRelatedToRoot = rdbtnAddRelatedToRoot;
 	}
 
-	public TargetControlPanel(DomainPanel domainPanel) {
-		this.domainPanel = domainPanel;
+	public TargetControlPanel(GUIMain gui) {
+		this.gui = gui;
 		
 		setBorder(new LineBorder(new Color(0, 0, 0)));
 
@@ -43,12 +44,13 @@ public class TargetControlPanel extends JPanel {
 		addButton.setToolTipText("add Top-Level domain");
 		addButton.addActionListener(new ActionListener() {
 			public void actionPerformed(ActionEvent e) {
-				if (domainPanel.getDomainResult() == null || domainPanel.getGuiMain().getCurrentDBFile() == null) {
-					domainPanel.createOrOpenDB();
+				DomainPanel domainPanel = gui.getDomainPanel();
+				if (domainPanel.getDomainResult() == null || BurpExtender.getDataLoadManager().getCurrentDBFile() == null) {
+					gui.getProjectMenu().createOrOpenDB();
 				} else {
 					String enteredRootDomain = JOptionPane.showInputDialog("Enter Root Domain", null);
 					TargetEntry entry = new TargetEntry(enteredRootDomain);
-					if(domainPanel.fetchTargetModel().addRowIfValid(entry)){
+					if(domainPanel.fetchTargetModel().addOrUpdateRowIfValid(entry)){
 						domainPanel.getDomainResult().addIfValid(enteredRootDomain);
 						btnFresh.doClick();
 					}
@@ -61,12 +63,13 @@ public class TargetControlPanel extends JPanel {
 		addButton1.setToolTipText("add Multiple-Level domain");
 		addButton1.addActionListener(new ActionListener() {
 			public void actionPerformed(ActionEvent e) {
+				DomainPanel domainPanel = gui.getDomainPanel();
 				if (domainPanel.getDomainResult() == null) {
-					domainPanel.createOrOpenDB();
+					gui.getProjectMenu().createOrOpenDB();
 				} else {
 					String enteredRootDomain = JOptionPane.showInputDialog("Enter Root Domain", null);
 					TargetEntry entry = new TargetEntry(enteredRootDomain,false);
-					if(domainPanel.fetchTargetModel().addRowIfValid(entry)){
+					if(domainPanel.fetchTargetModel().addOrUpdateRowIfValid(entry)){
 						domainPanel.getDomainResult().addIfValid(enteredRootDomain);
 						btnFresh.doClick();
 					}
@@ -78,7 +81,7 @@ public class TargetControlPanel extends JPanel {
 		JButton removeButton = new JButton("Remove");
 		removeButton.addActionListener(new ActionListener() {
 			public void actionPerformed(ActionEvent e) {
-
+				DomainPanel domainPanel = gui.getDomainPanel();
 				int[] rowindexes = domainPanel.getTargetTable().getSelectedRows();
 				for (int i = 0; i < rowindexes.length; i++) {
 					rowindexes[i] = domainPanel.getTargetTable().convertRowIndexToModel(rowindexes[i]);//转换为Model的索引，否则排序后索引不对应。
@@ -105,6 +108,7 @@ public class TargetControlPanel extends JPanel {
 					@Override
 					protected Map doInBackground() throws Exception {
 						btnFresh.setEnabled(false);
+						DomainPanel domainPanel = gui.getDomainPanel();
 						domainPanel.refreshShowSave();
 						return null;
 					}
@@ -124,6 +128,7 @@ public class TargetControlPanel extends JPanel {
 			public void actionPerformed(ActionEvent e) {
 				rdbtnAddRelatedToRoot.setEnabled(false);
 				try {
+					DomainPanel domainPanel = gui.getDomainPanel();
 					domainPanel.getDomainResult().autoAddRelatedToRoot = rdbtnAddRelatedToRoot.isSelected();
 					if (domainPanel.getDomainResult().autoAddRelatedToRoot) {
 						domainPanel.getDomainResult().relatedToRoot();
@@ -154,6 +159,7 @@ public class TargetControlPanel extends JPanel {
 	public void selectedToBalck(){
 		int option = JOptionPane.showConfirmDialog(null, "Are you sure set target to black?", "WARNING",JOptionPane.YES_NO_OPTION);
 		if (option == JOptionPane.YES_OPTION) {
+			DomainPanel domainPanel = gui.getDomainPanel();
 			int[] rowindexs = domainPanel.getTargetTable().getSelectedRows();
 			for (int i = 0; i < rowindexs.length; i++) {
 				rowindexs[i] = domainPanel.getTargetTable().convertRowIndexToModel(rowindexs[i]);//转换为Model的索引，否则排序后索引不对应。
@@ -163,8 +169,8 @@ public class TargetControlPanel extends JPanel {
 			TargetTableModel domainTableModel = domainPanel.fetchTargetModel();
 			for (int i = rowindexs.length - 1; i >= 0; i--) {
 				TargetEntry entry = domainTableModel.getValueAt(rowindexs[i]);
-				entry.setBlack(true);
-				domainTableModel.updateRow(entry);
+				entry.setTrustLevel(AssetTrustLevel.NonTarget);
+				domainTableModel.addOrUpdateRow(entry);
 			}
 		}
 	}

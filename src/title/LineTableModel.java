@@ -6,21 +6,30 @@ import java.net.URL;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 import java.util.TreeSet;
+import java.util.stream.Collectors;
 
 import javax.swing.ImageIcon;
 import javax.swing.table.AbstractTableModel;
 
+import com.bit4woo.utilbox.burp.HelperPlus;
+import com.bit4woo.utilbox.utils.DomainUtils;
+import com.bit4woo.utilbox.utils.IPAddressUtils;
+import com.bit4woo.utilbox.utils.UrlUtils;
+
 import GUI.GUIMain;
+import InternetSearch.InfoTuple;
+import InternetSearch.SearchType;
 import base.Commons;
 import base.IndexedHashMap;
 import base.IntArraySlice;
 import burp.BurpExtender;
-import burp.Getter;
-import burp.HelperPlus;
 import burp.IExtensionHelpers;
 import burp.IHttpRequestResponse;
 import burp.IHttpService;
@@ -28,9 +37,6 @@ import burp.IMessageEditorController;
 import dao.TitleDao;
 import domain.DomainManager;
 import domain.target.TargetTableModel;
-import utils.DomainNameUtils;
-import utils.IPAddressUtils;
-import utils.URLUtils;
 
 /**
  * 关于firexxx，目的是通知各个modelListener。默认的listener中，有一种的目的是：当数据发生变化时，更新GUI的显示。
@@ -52,22 +58,13 @@ public class LineTableModel extends AbstractTableModel implements IMessageEditor
 	PrintWriter stdout;
 	PrintWriter stderr;
 	private GUIMain guiMain;
+	public static final List<String> HeadList = LineTableHead.getTableHeadList();
 
-	private static final String[] standardTitles = new String[] {
-			"#", "URL", "Status", "Length", "Title","Comments","Server","isChecked",
-			"AssetType","Source","CheckDoneTime","IP", "CNAME|CertInfo","ASNInfo","Favicon","IconHash"};
-	private static List<String> titleList = new ArrayList<>(Arrays.asList(standardTitles));
-	//为了实现动态表结构
-	public static List<String> getTitleList() {
-		//titletList.remove("Server");
-		//titletList.remove("Time");
-		return titleList;
-	}
 
 
 	public LineTableModel(GUIMain guiMain){
 		this.guiMain = guiMain;
-		titleDao = new TitleDao(guiMain.getCurrentDBFile());
+		titleDao = new TitleDao(BurpExtender.getDataLoadManager().getCurrentDBFile());
 		try{
 			stdout = new PrintWriter(BurpExtender.getCallbacks().getStdout(), true);
 			stderr = new PrintWriter(BurpExtender.getCallbacks().getStderr(), true);
@@ -86,10 +83,21 @@ public class LineTableModel extends AbstractTableModel implements IMessageEditor
 	public LineTableModel(GUIMain guiMain,List<LineEntry> entries){
 		this(guiMain);
 		for (LineEntry entry:entries) {
+			if (entry == null || entry.getUrl() == null){
+				continue;
+			}
 			lineEntries.put(entry.getUrl(), entry);
 		}
 	}
 	////////getter setter//////////
+
+	/**
+	 * 当执行get title时，逻辑是重新
+	 * @return
+	 */
+	public boolean clearDataInDBFile(){
+		return titleDao.clearData();
+	}
 
 	public IndexedHashMap<String, LineEntry> getLineEntries() {
 		return lineEntries;
@@ -108,30 +116,34 @@ public class LineTableModel extends AbstractTableModel implements IMessageEditor
 	}
 	//////// ^^^^getter setter^^^^//////////
 
+	public LineEntry getRowAt(int rowIndex) {
+		return getLineEntries().get(rowIndex);
+	}
+
 	////////////////////// extend AbstractTableModel////////////////////////////////
 
 	@Override
 	public int getColumnCount()
 	{
-		return titleList.size();//the one is the request String + response String,for search
+		return HeadList.size();//the one is the request String + response String,for search
 	}
 
 	@Override
 	public Class<?> getColumnClass(int columnIndex)
 	{
-		if (columnIndex == titleList.indexOf("#")) {
+		if (columnIndex == HeadList.indexOf("#")) {
 			return Integer.class;//id
 		}
-		if (columnIndex == titleList.indexOf("Status")) {
+		if (columnIndex == HeadList.indexOf("Status")) {
 			return Integer.class;
 		}
-		if (columnIndex == titleList.indexOf("Length")) {
+		if (columnIndex == HeadList.indexOf("Length")) {
 			return Integer.class;
 		}
-		if (columnIndex == titleList.indexOf("isChecked")) {
+		if (columnIndex == HeadList.indexOf("isChecked")) {
 			return String.class;
 		}
-		if (columnIndex == titleList.indexOf("Favicon")) {
+		if (columnIndex == HeadList.indexOf("Favicon")) {
 			return ImageIcon.class;
 		}
 		return String.class;
@@ -146,8 +158,8 @@ public class LineTableModel extends AbstractTableModel implements IMessageEditor
 	//define header of table???
 	@Override
 	public String getColumnName(int columnIndex) {
-		if (columnIndex >= 0 && columnIndex <= titleList.size()) {
-			return titleList.get(columnIndex);
+		if (columnIndex >= 0 && columnIndex <= HeadList.size()) {
+			return HeadList.get(columnIndex);
 		}else {
 			return "";
 		}
@@ -155,13 +167,12 @@ public class LineTableModel extends AbstractTableModel implements IMessageEditor
 
 	@Override
 	public boolean isCellEditable(int rowIndex, int columnIndex) {
-		if (titleList.get(columnIndex).equals("Comments")) {//可以编辑comment
+		if (HeadList.get(columnIndex).equals("Comments")) {//可以编辑comment
 			return true;
 		}else {
 			return false;
 		}
 	}
-
 
 	@Override
 	public Object getValueAt(int rowIndex, int columnIndex)
@@ -172,60 +183,124 @@ public class LineTableModel extends AbstractTableModel implements IMessageEditor
 		LineEntry entry = lineEntries.get(rowIndex);
 		//entry.parse();---
 		//"#", "URL", "Status", "Length", "Server","Title", "IP", "CDN", "Comments","Time","isChecked"};
-		if (columnIndex == titleList.indexOf("#")) {
+		if (columnIndex == HeadList.indexOf("#")) {
 			return rowIndex;
 		}
-		else if (columnIndex == titleList.indexOf("URL")){
+		else if (columnIndex == HeadList.indexOf("URL")){
 			return entry.getUrl();
 		}
-		else if (columnIndex == titleList.indexOf("Status")){
+		else if (columnIndex == HeadList.indexOf("Status")){
 			return entry.getStatuscode();
 		}
-		else if (columnIndex == titleList.indexOf("Length")){
+		else if (columnIndex == HeadList.indexOf("Length")){
 			return entry.getContentLength();
 		}
-		else if (columnIndex == titleList.indexOf("Server")){
+		else if (columnIndex == HeadList.indexOf("Server")){
 			return entry.getWebcontainer();
 		}
-		else if (columnIndex == titleList.indexOf("Title")){
+		else if (columnIndex == HeadList.indexOf("Title")){
 			return entry.getTitle();
 		}
-		else if (columnIndex == titleList.indexOf("IP")){
+		else if (columnIndex == HeadList.indexOf("IP")){
 			return String.join(",", new TreeSet<String>(entry.getIPSet()));//用TreeSet进行排序
 		}
-		else if (columnIndex == titleList.indexOf("CNAME|CertInfo")){
+		else if (columnIndex == HeadList.indexOf("CNAME|CertInfo")){
 			return entry.fetchCNAMEAndCertInfo();
 		}
-		else if (columnIndex == titleList.indexOf("Comments")){
+		else if (columnIndex == HeadList.indexOf("Comments")){
 			return String.join(",", new TreeSet<String>(entry.getComments()));//用TreeSet进行排序
 		}
-		else if (columnIndex == titleList.indexOf("CheckDoneTime")){
+		else if (columnIndex == HeadList.indexOf("CheckDoneTime")){
 			return entry.getTime();
 		}
-		else if (columnIndex == titleList.indexOf("isChecked")){
+		else if (columnIndex == HeadList.indexOf("isChecked")){
 			return entry.getCheckStatus();
 		}
-		else if (columnIndex == titleList.indexOf("AssetType")){
+		else if (columnIndex == HeadList.indexOf("AssetType")){
 			return entry.getAssetType();
 		}
-		else if (columnIndex == titleList.indexOf("Favicon")){
+		else if (columnIndex == HeadList.indexOf("Favicon")){
 			//return entry.getIcon_hash();
 			byte[] data = entry.getIcon_bytes();
+			String hash = entry.getIcon_hash();
+			//排序比较是获取对象的toString()结果进行的。当ImageIcon有描述description时，toString()的值就是description。
+			//所以传递hash作为描述，可以实现图标的点击排序，还和hash的排序一致
 			if (data != null) {
-				return new ImageIcon(data);
+				return new ImageIcon(data,hash);
 			}
 			return null;
 		}
-		else if (columnIndex == titleList.indexOf("IconHash")){
+		else if (columnIndex == HeadList.indexOf("IconHash")){
 			return entry.getIcon_hash();
 		}
-		else if (columnIndex == titleList.indexOf("ASNInfo")){
+		else if (columnIndex == HeadList.indexOf("ASNInfo")){
 			return entry.getASNInfo();
 		}
-		else if (columnIndex == titleList.indexOf("Source")) {
+		else if (columnIndex == HeadList.indexOf("Source")) {
 			return entry.getEntrySource();
 		}
 		return "";
+	}
+
+
+	/**
+	 * 返回可以用于网络搜索引擎进行搜索地字段
+	 * @param rowIndex
+	 * @param columnIndex
+	 * @return
+	 */
+	public InfoTuple<String, String> getSearchTypeAndValue(int rowIndex, int columnIndex) {
+		if (rowIndex >= lineEntries.size()) {
+			return new InfoTuple<>(null,null);
+		}
+		LineEntry entry = lineEntries.get(rowIndex);
+
+		if (columnIndex == HeadList.indexOf(LineTableHead.Title)){
+			String value =  entry.getTitle();
+			return new InfoTuple<>(SearchType.Title, value);
+		}else if (columnIndex == HeadList.indexOf(LineTableHead.Server)){
+			String value =  entry.getWebcontainer();
+			return new InfoTuple<>(SearchType.Server, value);
+		}else if (columnIndex == HeadList.indexOf(LineTableHead.IP)){
+			if (entry.getIPSet().iterator().hasNext()) {
+				String value = entry.getIPSet().iterator().next();
+				if (IPAddressUtils.isPublicIPv4NoPort(value)) {
+					return new InfoTuple<>(SearchType.IP, value);
+				}
+			}
+			return new InfoTuple<>(null, null);
+		}else if (columnIndex == HeadList.indexOf(LineTableHead.Favicon) || columnIndex == HeadList.indexOf(LineTableHead.IconHash)){
+			String value = entry.getIcon_hash();
+			return new InfoTuple<>(SearchType.IconHash, value);
+		}else if (columnIndex == HeadList.indexOf(LineTableHead.CNAMEAndCertInfo)){
+			//String value =  String.join(",", new TreeSet<String>(entry.getCertDomainSet()));
+			if (entry.getCertDomainSet().iterator().hasNext()) {
+				String value = entry.getCertDomainSet().iterator().next();
+				return new InfoTuple<>(SearchType.SubDomain, value);
+			}
+			return new InfoTuple<>(null, null);
+		}else if (columnIndex == HeadList.indexOf(LineTableHead.ASNInfo)){
+			//应该获取ASN编号
+			int num =  entry.getAsnNum();
+			if (num > 0){
+				return new InfoTuple<>(SearchType.Asn, num+"");
+			}else {
+				return new InfoTuple<>(SearchType.Asn, null);
+			}
+		}else if (columnIndex == HeadList.indexOf(LineTableHead.Comments)){
+			if (entry.getComments().iterator().hasNext()) {
+				String value = entry.getComments().iterator().next();
+				return new InfoTuple<>(SearchType.OriginalString, value);
+			}
+			return new InfoTuple<>(null, null);
+		}else {
+			String value = entry.getHost();
+			if (IPAddressUtils.isValidIPv4NoPort(value)) {
+				return new InfoTuple<>(SearchType.IP, value);
+			}else {
+				return new InfoTuple<>(SearchType.SubDomain, value);
+			}
+		}
 	}
 
 	@Override
@@ -234,7 +309,7 @@ public class LineTableModel extends AbstractTableModel implements IMessageEditor
 		if (entry == null) {
 			throw new ArrayIndexOutOfBoundsException("can't find item with index "+row);
 		}
-		if (col == titleList.indexOf("Comments")){
+		if (col == HeadList.indexOf(LineTableHead.Comments)){
 			String valueStr = ((String) value).trim();
 			entry.setComments(new HashSet<>(Arrays.asList(valueStr.split(","))));
 			titleDao.addOrUpdateTitle(entry);//写入数据库
@@ -294,7 +369,7 @@ public class LineTableModel extends AbstractTableModel implements IMessageEditor
 			}
 
 			for (String ip:line.getIPSet()) {
-				if (excludePrivate && IPAddressUtils.isPrivateIPv4(ip)) {
+				if (excludePrivate && IPAddressUtils.isPrivateIPv4NoPort(ip)) {
 					continue;
 				}
 				result.add(ip);
@@ -454,6 +529,26 @@ public class LineTableModel extends AbstractTableModel implements IMessageEditor
 		}
 		return urls;
 	}
+	
+	
+	public List<String> getURLsDeduplicatedByIP(int[] rows) {
+		Arrays.sort(rows); //升序
+		List<String> urls = new ArrayList<>();
+		
+		Map<String,String> tmpDict = new HashMap<>();
+		for (int i=rows.length-1;i>=0 ;i-- ) {//降序删除才能正确删除每个元素
+			String url = lineEntries.get(rows[i]).getUrl();
+			
+			Set<String> sortedSet = new TreeSet<>(lineEntries.get(rows[i]).getIPSet());
+	        // Join the sorted elements into a single string
+	        String uniqueString = sortedSet.stream()
+	                                       .collect(Collectors.joining(","));
+			tmpDict.put(uniqueString, url);
+			
+		}
+		urls.addAll(tmpDict.values());
+		return urls;
+	}
 
 	public List<String> getURLsOfFavicon(int[] rows) {
 		Arrays.sort(rows); //升序
@@ -462,7 +557,7 @@ public class LineTableModel extends AbstractTableModel implements IMessageEditor
 		for (int i=rows.length-1;i>=0 ;i-- ) {//降序删除才能正确删除每个元素
 			String url = lineEntries.get(rows[i]).getUrl();
 			if (url != null) {
-				url = URLUtils.getBaseUrl(url)+"/favicon.ico";
+				url = UrlUtils.getBaseUrl(url)+"/favicon.ico";
 				urls.add(url);
 			}
 		}
@@ -495,7 +590,7 @@ public class LineTableModel extends AbstractTableModel implements IMessageEditor
 
 	public List<String> getHeaderValues(int[] rows,boolean isRequest,String headerName) {
 		List<String> result = new ArrayList<>();
-		if (headerName ==null ||headerName.trim().equals("")) {
+		if (org.apache.commons.lang3.StringUtils.isEmpty(headerName)) {
 			return result;
 		}
 
@@ -506,8 +601,7 @@ public class LineTableModel extends AbstractTableModel implements IMessageEditor
 
 		Arrays.sort(rows); //升序
 
-		IExtensionHelpers helpers = BurpExtender.getCallbacks().getHelpers();
-		HelperPlus getter = new HelperPlus(helpers);
+		HelperPlus getter = BurpExtender.getHelperPlus();
 
 		for (int i=rows.length-1;i>=0 ;i-- ) {//降序删除才能正确删除每个元素
 			LineEntry entry = lineEntries.get(rows[i]);
@@ -611,61 +705,116 @@ public class LineTableModel extends AbstractTableModel implements IMessageEditor
 			e.printStackTrace(stderr);
 		}
 	}
-
+	
 	/**
 	 * 删除明显非目标的记录
-	 * 1、host的类型时useless，并且来源是certain。这类记录往往是由于删除了某些根域名造成的。
+	 * 1、host的类型是useless，并且来源是certain。这类记录往往是由于删除了某些根域名造成的。
 	 * 2、来自custom(网络搜索引擎添加、手动添加),但是其证书域名明显不是目标的
 	 */
-	public void removeRowsNotInTargets() {
+	public void MarkNotTargetRows() {
 		TargetTableModel model = guiMain.getDomainPanel().getTargetTable().getTargetModel();
 
 		for (int i=lineEntries.size()-1;i>=0 ;i-- ) {//降序删除才能正确删除每个元素
 			try {
 				LineEntry entry = lineEntries.get(i);
 				if (entry == null) {
-					throw new ArrayIndexOutOfBoundsException("can't find item with index "+i);
+					continue;
 				}
-				String url = entry.getUrl();
-				String host = entry.getHost();
+				if (entry.getEntrySource().equalsIgnoreCase(LineEntry.Source_Manual_Saved)){
+					continue;
+				}
 				if (entry.getCertDomainSet().contains("ingress.local")){
 					continue;
 				}
 
-				//规则1
+				
+				String host = entry.getHost();
+				int port = entry.getPort();
+
 				int type = model.assetType(host);
-				if ((type == DomainManager.USELESS || type==DomainManager.SIMILAR_DOMAIN)
-						&& entry.getEntrySource().equals(LineEntry.Source_Certain)) {
-					lineEntries.remove(i);
-					titleDao.deleteTitleByUrl(url);//写入数据库
-					stdout.println("!!! "+url+" deleted");
-					this.fireTableRowsDeleted(i,i);
+				
+				if (type == DomainManager.IP_ADDRESS) {
+					//避免网段内IP、内网IP被删除，应该通过网段信息判断
+					continue;
 				}
+				
+				//规则1
+				if (DomainUtils.isValidDomainNoPort(host)) {
+					if ((type == DomainManager.USELESS || type==DomainManager.SIMILAR_DOMAIN)
+							&& entry.getEntrySource().equals(LineEntry.Source_Certain)) {
+						
+						entry.addComment("Non-Target[host is not target]");
+						titleDao.addOrUpdateTitle(entry);//写入数据库
+						this.fireTableRowsUpdated(i, i);
+						
+						continue;
+					}
+				}else {
+					//规则2，根据证书域名进行判断，注意，像ingress.local这种也会被删除
+					Set<String> certDomains = entry.getCertDomainSet();
+					if (certDomains.size()>0) {
 
-				//规则2，注意，像ingress.local这种也会被删除
-				Set<String> certDomains = entry.getCertDomainSet();
-				if (certDomains.size()>0) {//无证书信息的记录不处理
+						int uselessCount = 0;
+						for (String domain:certDomains) {
+							type = model.assetType(domain);
+							if (type == DomainManager.USELESS || type==DomainManager.SIMILAR_DOMAIN) {
+								uselessCount++;
+							}
+						}
 
-					int uselessCount = 0;
-					for (String domain:certDomains) {
-						type = model.assetType(domain);
-						if (type == DomainManager.USELESS || type==DomainManager.SIMILAR_DOMAIN) {
-							uselessCount++;
+						if (uselessCount == certDomains.size() &&
+								(entry.getEntrySource().equals(LineEntry.Source_Custom_Input) ||
+										entry.getEntrySource().equals(LineEntry.Source_Subnet_Extend))
+								) {
+							guiMain.getDomainPanel().getDomainResult().getSpecialPortTargets().remove(host);
+							guiMain.getDomainPanel().getDomainResult().getNotTargetIPSet().add(host);
+							
+							entry.addComment("Non-Target[cert domain is not target]");
+							titleDao.addOrUpdateTitle(entry);//写入数据库
+							this.fireTableRowsUpdated(i, i);
+							
+							continue;
+						}
+					}else {
+						//无证书信息,并且自定义资产中不包含的，删除
+						Set<String> customIP = guiMain.getDomainPanel().getDomainResult().getSpecialPortTargets();
+
+						if (!customIP.contains(host) && !customIP.contains(host+":"+port)) {
+							
+							entry.addComment("Non-Target[host IP not in custom assets]");
+							titleDao.addOrUpdateTitle(entry);//写入数据库
+							this.fireTableRowsUpdated(i, i);
+							
+							continue;
 						}
 					}
-
-					if (uselessCount == certDomains.size() && 
-							(entry.getEntrySource().equals(LineEntry.Source_Custom_Input) || 
-									entry.getEntrySource().equals(LineEntry.Source_Subnet_Extend))
-							) {
-						guiMain.getDomainPanel().getDomainResult().getSpecialPortTargets().remove(host);
-						guiMain.getDomainPanel().getDomainResult().getNotTargetIPSet().add(host);
-						lineEntries.remove(i);
-						titleDao.deleteTitleByUrl(url);//写入数据库
-						stdout.println("!!! "+url+" deleted");
-						this.fireTableRowsDeleted(i,i);
-					}
 				}
+			} catch (Exception e) {
+				e.printStackTrace(stderr);
+			}
+		}
+	}
+
+	/**
+	 * 先标记，再删除，给用户识别空间，以便优化规则。
+	 */
+	public void removeRowsNotInTargets() {
+		MarkNotTargetRows();
+
+		for (int i=lineEntries.size()-1;i>=0 ;i-- ) {//降序删除才能正确删除每个元素
+			try {
+				LineEntry entry = lineEntries.get(i);
+				if (entry == null) {
+					continue;
+				}
+				if (entry.getComments().toString().contains("Non-Target[")) {
+					String url = entry.getUrl();
+					lineEntries.remove(i);
+					titleDao.deleteTitleByUrl(url);//写入数据库
+					stdout.println("!!! "+url+" deleted, due to : "+entry.getComments().toString());
+					this.fireTableRowsDeleted(i,i);
+				}
+				
 			} catch (Exception e) {
 				e.printStackTrace(stderr);
 			}
@@ -679,10 +828,6 @@ public class LineTableModel extends AbstractTableModel implements IMessageEditor
 		for (int i=lineEntries.size()-1;i>=0 ;i-- ) {//降序删除才能正确删除每个元素
 			try {
 				LineEntry entry = lineEntries.get(i);
-				if (entry == null) {
-					throw new ArrayIndexOutOfBoundsException("can't find item with index "+i);
-				}
-
 				markFullSameEntries(entry);
 
 			} catch (Exception e) {
@@ -758,6 +903,28 @@ public class LineTableModel extends AbstractTableModel implements IMessageEditor
 		}
 	}
 
+
+	public void clearComments(int[] rows) {
+		//because thread let the delete action not in order, so we must loop in here.
+		//list length and index changed after every remove.the origin index not point to right item any more.
+		Arrays.sort(rows); //升序
+		for (int i=rows.length-1;i>=0 ;i-- ) {//降序删除才能正确删除每个元素
+			try {
+				int index = rows[i];
+				LineEntry entry = lineEntries.get(index);
+				if (entry == null) {
+					throw new ArrayIndexOutOfBoundsException("can't find item with index "+index);
+				}
+				entry.getComments().clear();
+				titleDao.addOrUpdateTitle(entry);//写入数据库
+				stdout.println("$$$ "+entry.getUrl()+" updated");
+				this.fireTableRowsUpdated(index, index);
+			} catch (Exception e) {
+				e.printStackTrace(stderr);
+			}
+		}
+	}
+
 	public void freshASNInfo(int[] rows) {
 		//because thread let the delete action not in order, so we must loop in here.
 		//list length and index changed after every remove.the origin index not point to right item any more.
@@ -821,7 +988,7 @@ public class LineTableModel extends AbstractTableModel implements IMessageEditor
 			if (item.contains(":")) {//有可能domain:port的情况
 				item = item.split(":")[0];
 			}
-			if (DomainNameUtils.isValidDomain(item)) {
+			if (DomainUtils.isValidDomainNoPort(item)) {
 				tmp.add(item);
 			}
 		}
@@ -829,8 +996,8 @@ public class LineTableModel extends AbstractTableModel implements IMessageEditor
 		Collection<LineEntry> entries = getLineEntries().values();
 		for (LineEntry entry:entries) {
 			String ip = new ArrayList<String>(entry.getIPSet()).get(0);//这里可能不严谨，如果IP解析既有外网地址又有内网地址就会出错
-			if (!IPAddressUtils.isPrivateIPv4(ip)) {//移除公网解析记录；剩下无解析记录和内网解析记录
-				if (entry.getStatuscode() == 403 && DomainNameUtils.isValidDomain(entry.getHost())) {
+			if (!IPAddressUtils.isPrivateIPv4NoPort(ip)) {//移除公网解析记录；剩下无解析记录和内网解析记录
+				if (entry.getStatuscode() == 403 && DomainUtils.isValidDomainNoPort(entry.getHost())) {
 					//do Nothing
 				}else {
 					tmp.remove(entry.getHost());
@@ -888,22 +1055,21 @@ public class LineTableModel extends AbstractTableModel implements IMessageEditor
 		LineEntry ret = lineEntries.put(key,lineEntry);
 		//以前的做法是，put之后再次统计size来判断是新增还是替换，这种方法在多线程时可能不准确，
 		//concurrentHashMap的put方法会在替换时返回原来的值，可用于判断是替换还是新增
-		int index = lineEntries.IndexOfKey(key);
-		if (ret == null) {
-			try {
-				fireTableRowsInserted(index, index);
-			} catch (Exception e) {
-				//出错只会暂时影响显示，不影响数据内容，不再打印
-				//e.printStackTrace(BurpExtender.getStderr());
-				//BurpExtender.getStderr().println("index: "+index+" url: "+key);
-			}
-			//这里偶尔出现IndexOutOfBoundsException错误,
-			// 但是debug发现javax.swing.DefaultRowSorter.checkAgainstModel在条件为false时(即未越界)抛出了异常，奇怪！
-		}else {
-			fireTableRowsUpdated(index, index);
-		}
-
 		titleDao.addOrUpdateTitle(lineEntry);//写入数据库
+
+		int index = lineEntries.IndexOfKey(key);
+		try {
+			if (ret == null) {
+				fireTableRowsInserted(index, index);
+				//出错只会暂时影响显示，不影响数据内容，不再打印
+				//这里偶尔出现IndexOutOfBoundsException错误，但是debug发现javax.swing.DefaultRowSorter.checkAgainstModel在条件为false时(即未越界)抛出了异常，奇怪！
+				//大概率是因为排序器和数据模型不同步导致的，但是每次同步排序器会导致界面数据不停刷新，这个过程中难以操作数据表。
+			}else {
+				fireTableRowsUpdated(index, index);
+			}
+		} catch (Exception e) {
+			//e.printStackTrace(stderr);
+		}
 
 		//need to use row-1 when add setRowSorter to table. why??
 		//https://stackoverflow.com/questions/6165060/after-adding-a-tablerowsorter-adding-values-to-model-cause-java-lang-indexoutofb
@@ -911,7 +1077,7 @@ public class LineTableModel extends AbstractTableModel implements IMessageEditor
 	}
 
 	/**
-	 * 
+	 *
 	 * 这个方法更新了URL的比对方法，无论是否包含默认端口都可以成功匹配
 	 */
 	public LineEntry findLineEntry(String url) {//这里的URL需要包含默认端口!!!
@@ -931,12 +1097,11 @@ public class LineTableModel extends AbstractTableModel implements IMessageEditor
 	 * @return
 	 */
 	public LineEntry findLineEntryByMessage(IHttpRequestResponse message) {
-		IExtensionHelpers helpers = BurpExtender.getCallbacks().getHelpers();
-		Getter getter = new Getter(helpers);
+		HelperPlus getter = BurpExtender.getHelperPlus();
 		URL fullurl = getter.getFullURL(message);
 		LineEntry entry = findLineEntry(fullurl.toString());
 		if (entry == null) {
-			URL shortUrl = getter.getShortURL(message);
+			URL shortUrl = HelperPlus.getBaseURL(message);
 			if(!fullurl.equals(shortUrl)) {
 				entry = findLineEntry(shortUrl.toString());
 			}
@@ -970,7 +1135,7 @@ public class LineTableModel extends AbstractTableModel implements IMessageEditor
 
 
 	/**
-	 * 
+	 *
 	 * find all lineEntries base host and port，通常根据IP+端口来确定一个服务。
 	 */
 	public List<LineEntry> findLineEntriesByHostAndPort(String host,int port) {//
@@ -999,6 +1164,8 @@ public class LineTableModel extends AbstractTableModel implements IMessageEditor
 
 	/**
 	 * 查找完全一模一样的数据包（带时间戳锚点的URL可以不同）
+	 *
+	 * 相同IP和端口,URL path下，即使域名不同，返回包不同（页面包含随机js、css链接），只要status和length相同，就是重复的web服务了
 	 */
 	public void markFullSameEntries(LineEntry entry) {//
 		if (lineEntries == null) return;
@@ -1006,34 +1173,40 @@ public class LineTableModel extends AbstractTableModel implements IMessageEditor
 		for (int i=lineEntries.size()-1;i>=0 ;i-- ) {//降序删除才能正确删除每个元素
 			LineEntry value = lineEntries.get(i);
 
+			if (entry.getComments().contains("duplicateItem")) {
+				//已经被标注过，不用再找它的相同项了
+				continue;
+			}
+
 			if (value.equals(entry)){
 				continue;//首先得排除自己，否则删除时就全删除了
 			}
 
-			if (!value.getUrl().equals(entry.getUrl())){
-				continue;
-			}
-			if (!value.getRequest().equals(entry.getRequest())){
-				continue;
-			}
-			if (!value.getResponse().equals(entry.getResponse())){
-				continue;
-			}
-			if (!value.getComments().equals(entry.getComments())){
+			if (value.getStatuscode()!=entry.getStatuscode()){
 				continue;
 			}
 
-			if (!value.getIPSet().equals(entry.getIPSet()) && !value.getIPSet().isEmpty() && !entry.getIPSet().isEmpty()){
+			if (value.getContentLength()!=entry.getContentLength()){
+				continue;
+			}
+
+			if (value.getPort()!=entry.getPort()){
+				continue;
+			}
+
+			if (!value.getIPSet().equals(entry.getIPSet())|| value.getIPSet().isEmpty()){
 				//只有当IP不为空才有比较的必要
 				continue;
 			}
 
-			if (!value.getCNAMESet().equals(entry.getCNAMESet()) && !value.getCNAMESet().isEmpty() && !entry.getCNAMESet().isEmpty() ){
-				//只有当CNAME不为空才有比较的必要
+			String url1 = value.getUrl().replaceFirst(value.getHost(),"");
+			String url2 = entry.getUrl().replaceFirst(entry.getHost(),"");
+			if (!Objects.equals(url1, url2)){
 				continue;
 			}
 
 			value.addComment("duplicateItem");
+			value.setCheckStatus(LineEntry.CheckStatus_Checked);
 			fireTableRowsUpdated(i,i);//主动通知更新，否则不会写入数据库!!!
 		}
 	}
