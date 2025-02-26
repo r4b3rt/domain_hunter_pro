@@ -1,24 +1,31 @@
 package burp;
 
-import java.awt.Component;
-import java.awt.Container;
-import java.awt.Frame;
 import java.awt.event.ActionEvent;
 import java.io.File;
+import java.io.IOException;
+import java.io.PrintWriter;
 import java.util.List;
 import java.util.Map;
 
 import javax.swing.AbstractAction;
-import javax.swing.JFrame;
 import javax.swing.JMenu;
-import javax.swing.JMenuBar;
 import javax.swing.JMenuItem;
+import javax.swing.JOptionPane;
+import javax.swing.JPopupMenu;
 import javax.swing.JTabbedPane;
 import javax.swing.SwingWorker;
+import javax.swing.event.MenuEvent;
+import javax.swing.event.MenuListener;
+
+import org.apache.commons.io.FileUtils;
+import org.apache.commons.lang3.StringUtils;
 
 import GUI.GUIMain;
+import base.Commons;
 import base.DictFileReader;
+import base.dbFileChooser;
 import dao.DomainDao;
+import dao.TargetDao;
 import dao.TitleDao;
 import domain.DomainManager;
 import title.LineEntry;
@@ -27,13 +34,21 @@ import title.LineEntry;
  * 构造项目菜单
  *
  */
-public class ProjectMenu extends JMenu{
+public class ProjectMenu extends JPopupMenu{
 	GUIMain gui;
-	public JMenuItem lockMenu;
+	private PrintWriter stdout;
+	private PrintWriter stderr;
 
 	public ProjectMenu(GUIMain gui){
 		this.gui = gui;
-		this.setText("DomainHunter");
+
+		try {
+			stdout = new PrintWriter(BurpExtender.getCallbacks().getStdout(), true);
+			stderr = new PrintWriter(BurpExtender.getCallbacks().getStderr(), true);
+		} catch (Exception e) {
+			stdout = new PrintWriter(System.out, true);
+			stderr = new PrintWriter(System.out, true);
+		}
 
 		JMenuItem newMenu = new JMenuItem(new AbstractAction("New")
 		{
@@ -43,7 +58,7 @@ public class ProjectMenu extends JMenu{
 			}
 		});
 		newMenu.setToolTipText("Create A New Project File(DB File)");
-		this.add(newMenu);
+
 
 		JMenuItem openMenu = new JMenuItem(new AbstractAction("Open") {
 			@Override
@@ -52,18 +67,83 @@ public class ProjectMenu extends JMenu{
 			}
 		});
 		openMenu.setToolTipText("Open Domain Hunter Project File(DB File)");
-		this.add(openMenu);
 
 
-		JMenuItem renameMenu = new JMenuItem(new AbstractAction("Rename(Save As)")
+
+		JMenu openRecentMenu = new JMenu("Open Recent");
+
+		/*
+		openRecentMenu.addMouseMotionListener(new MouseMotionAdapter() {
+		//这个事件会被频繁触发！弃用！
+			@Override
+			public void mouseMoved(MouseEvent e) {
+				// 当鼠标移动到菜单上时创建新的菜单项并添加到菜单中
+				gui.getDataLoadManager().createRecentOpenItem(openRecentMenu);
+			}
+		});
+		 */
+
+		openRecentMenu.setToolTipText("Open Recent Domain Hunter Project File(DB File)");
+
+
+
+		openRecentMenu.addMenuListener(new MenuListener() {
+			@Override
+			public void menuSelected(MenuEvent e) {
+				// 当菜单被选中时触发的逻辑
+				BurpExtender.getDataLoadManager().createRecentOpenItem(openRecentMenu);
+			}
+
+			@Override
+			public void menuDeselected(MenuEvent e) {
+				// 当菜单被取消选中时触发的逻辑
+			}
+
+			@Override
+			public void menuCanceled(MenuEvent e) {
+				// 当菜单被取消时触发的逻辑
+			}
+		});
+
+		JMenuItem renameMenu = new JMenuItem(new AbstractAction("Rename")
 		{
 			@Override
 			public void actionPerformed(ActionEvent actionEvent) {
-				gui.getDomainPanel().renameDB();
+				renameDB();
 			}
 		});
 		renameMenu.setToolTipText("Rename current DB File");
-		this.add(renameMenu);
+
+
+
+		JMenuItem saveDomainOnly = new JMenuItem(new AbstractAction("Save Domain Only")
+		{
+			@Override
+			public void actionPerformed(ActionEvent actionEvent) {
+				saveDomainOnly();
+			}
+		});
+		saveDomainOnly.setToolTipText("Only save data in Domain Panel");
+
+
+
+		JMenuItem buckupDB = new JMenuItem(new AbstractAction("Backup DB")
+		{
+			@Override
+			public void actionPerformed(ActionEvent actionEvent) {
+				backupDB(null);
+			}
+		});
+
+
+		JMenuItem removeDB = new JMenuItem(new AbstractAction("Remove DB")
+		{
+			@Override
+			public void actionPerformed(ActionEvent actionEvent) {
+				removeDB();
+			}
+		});
+
 
 		/**
 		 * 导入db文件，将数据和当前DB文件进行合并。
@@ -73,13 +153,13 @@ public class ProjectMenu extends JMenu{
 		JMenuItem ImportMenu = new JMenuItem(new AbstractAction("Import DB") {
 			@Override
 			public void actionPerformed(ActionEvent actionEvent) {
-				gui.getDomainPanel().backupDB("before import");//导入前的备份。
+				backupDB("before import");//导入前的备份。
 
-				File file = gui.dbfc.dialog(true,".db");
+				File file = new dbFileChooser().dialog(true,".db");
 				if (null ==file) {
 					return;
 				}
-				if (file.toString().equals(gui.getCurrentDBFile().toString())) {
+				if (file.toString().equals(BurpExtender.getDataLoadManager().getCurrentDBFile().toString())) {
 					return;
 				}
 
@@ -105,7 +185,6 @@ public class ProjectMenu extends JMenu{
 			}
 		});
 		ImportMenu.setToolTipText("Import Project File(DB File)");
-		this.add(ImportMenu);
 
 
 		/**
@@ -119,9 +198,9 @@ public class ProjectMenu extends JMenu{
 				SwingWorker<Map, Map> worker = new SwingWorker<Map, Map>() {
 					@Override
 					protected Map doInBackground() throws Exception {
-						gui.getDomainPanel().backupDB("before import");//导入前的备份。
+						backupDB("before import");//导入前的备份。
 
-						File file = gui.dbfc.dialog(true,".txt");
+						File file = new dbFileChooser().dialog(true,".txt");
 						if (null ==file) {
 							return null;
 						}
@@ -151,173 +230,149 @@ public class ProjectMenu extends JMenu{
 			}
 		});
 		ImportMenu.setToolTipText("Import Domain From Text File");
-		this.add(ImportFromTextFileMenu);
 
-		//TODO
-		JMenuItem detachMenu = new JMenuItem(new AbstractAction("Detach")
-		{
-			@Override
-			public void actionPerformed(ActionEvent actionEvent) {
 
-			}
-		});
-		//this.add(detachMenu);
-
-		lockMenu = new JMenuItem(new AbstractAction("Lock")
+		JMenuItem lockMenu = new JMenuItem(new AbstractAction("Lock&Unlock")
 		{
 			@Override
 			public void actionPerformed(ActionEvent actionEvent) {
 				gui.lockUnlock();
 			}
 		});
-		this.add(lockMenu);
 
-		//为了菜单能够区分
-		File dbFile = gui.getCurrentDBFile();
-		if (dbFile != null){
-			AddDBNameMenuItem(dbFile.getName());
-		}
+
+
+		this.add(newMenu);
+		this.add(openMenu);
+		this.add(openRecentMenu);
+		this.add(renameMenu);
+		this.add(saveDomainOnly);
+		this.add(buckupDB);
+		this.add(removeDB);
+		//this.add(ImportMenu);
+		//this.add(ImportFromTextFileMenu);
+		this.addSeparator();
+		this.add(lockMenu);
 	}
 
 	public void createNewDb(GUIMain gui) {
-		File file = gui.dbfc.dialog(false,".db");//通过保存对话指定文件，这会是一个空文件。
+		File file = new dbFileChooser().dialog(false,".db");//通过保存对话指定文件，这会是一个空文件。
 		if (null != file) {
 			gui.getDomainPanel().setDomainResult(new DomainManager(gui));
-			gui.getDataLoadManager().loadDbfileToHunter(file.toString());//然后加载，就是一个新的空项目了。
+			BurpExtender.getDataLoadManager().loadDbfileToHunter(file.toString());//然后加载，就是一个新的空项目了。
 		}
 	}
 
 	public void openDb() {
-		File file = gui.dbfc.dialog(true,".db");
+		File file = new dbFileChooser().dialog(true,".db");
 		if (null != file) {
-			gui.getDataLoadManager().loadDbfileToHunter(file.toString());
+			BurpExtender.getDataLoadManager().loadDbfileToHunter(file.toString());
 		}
 	}
 
-	public void Add() {
-		int count = 500;
-		JMenuBar menuBar = getBurpFrame().getJMenuBar();
-		while(count > 0) {
-			try{
-				if (menuBar == null){
-					try {
-						Thread.sleep(100);
-						count--;
-					} catch (InterruptedException e1) {
-						e1.printStackTrace();
-					}
-				}else {
-					menuBar.add(this, menuBar.getMenuCount() - 1);
-					menuBar.repaint();
-					break;
+
+	public void openRecentDb() {
+		File file = new dbFileChooser().dialog(true,".db");
+		if (null != file) {
+			BurpExtender.getDataLoadManager().loadDbfileToHunter(file.toString());
+		}
+	}
+
+	/*
+    单独保存域名信息到另外的文件
+	 */
+	public File saveDomainOnly() {
+		try {
+			File file = new dbFileChooser().dialog(false,".db");
+			if (file != null) {
+				DomainDao dao = new DomainDao(file.toString());
+				TargetDao dao1 = new TargetDao(file.toString());
+				if (dao.saveDomainManager(gui.getDomainPanel().getDomainResult()) && dao1.addOrUpdateTargets(gui.getDomainPanel().fetchTargetModel().getTargetEntries())) {
+					stdout.println("Save Domain Only Success! " + Commons.getNowTimeString());
+					return file;
 				}
-			}catch (Exception e){
-				e.printStackTrace();
-				e.printStackTrace(BurpExtender.getStderr());
+			}
+		} catch (Exception e) {
+			e.printStackTrace(stderr);
+		}
+		stdout.println("Save Domain Only failed! " + Commons.getNowTimeString());
+		return null;
+	}
+
+	public void backupDB(String keyword) {
+		File file = BurpExtender.getDataLoadManager().getCurrentDBFile();
+		if (file == null) return;
+		String suffix = ".bak" + Commons.getNowTimeString();
+		if (!StringUtils.isEmpty(keyword)) {
+			keyword = keyword.replaceAll("\\s+", "-");
+			suffix += keyword;
+		}
+		File bakfile = new File(file.getAbsoluteFile().toString() + suffix);
+		try {
+			FileUtils.copyFile(file, bakfile);
+			BurpExtender.getStdout().println("DB File Backed Up:" + bakfile.getAbsolutePath());
+		} catch (IOException e1) {
+			e1.printStackTrace(BurpExtender.getStderr());
+		}
+	}
+
+	public void removeDB() {
+		File file = BurpExtender.getDataLoadManager().getCurrentDBFile();
+		if (file == null) return;
+		try {
+			int result = JOptionPane.showConfirmDialog(null,"Are you sure to DELETE this DB file ?");
+			if (result == JOptionPane.YES_OPTION) {
+				FileUtils.delete(file);
+				BurpExtender.getStdout().println("DB File Removed:" + file.getAbsolutePath());
+			}
+		} catch (IOException e1) {
+			e1.printStackTrace(BurpExtender.getStderr());
+		}
+	}
+
+	public void renameDB() {
+		File file = BurpExtender.getDataLoadManager().getCurrentDBFile();
+		if (file == null) return;
+
+		String currentName = file.getName();
+		String currentPath = file.getParent();
+
+		//File newFile = new dbFileChooser().dialog(false,".db");//通过保存对话指定文件，这会是一个空文件。
+		String newFilename = JOptionPane.showInputDialog("Enter New DB File Name", currentName);
+
+		if (null != newFilename) {
+			try {
+				File newFile = new File(currentPath+File.separator+newFilename);
+				FileUtils.moveFile(file, newFile);
+				if (newFile.exists()) {
+					BurpExtender.getDataLoadManager().loadDbfileToHunter(newFile.toString());
+				}
+			} catch (IOException e) {
+				e.printStackTrace(stderr);
 			}
 		}
 	}
 
-	public void remove(){
-		JMenuBar menuBar = getBurpFrame().getJMenuBar();
-		if (menuBar != null){
-			menuBar.remove(this);
-			menuBar.repaint();
+	public void createOrOpenDB() {
+		Object[] options = { "Create","Open"};
+		int user_input = JOptionPane.showOptionDialog(null, "You should Create or Open a DB file", "Chose Your Action",
+				JOptionPane.DEFAULT_OPTION, JOptionPane.WARNING_MESSAGE, null, options, options[0]);
+		if (user_input == 0) {
+			createNewDb(gui);
 		}
-	}
-
-	/**
-	 * 最上面的项目菜单中显示项目名称
-	 * @param name
-	 */
-	public void AddDBNameMenuItem(String name){
-		if (null==name) return;
-		String firstName = this.getItem(0).getName();
-		if (firstName != null && firstName.equals("JustDisplayDBFileName")){
-			this.remove(0);
+		if (user_input == 1) {
+			openDb();
 		}
-		JMenuItem nameItem = new JMenuItem("Project:"+name);
-		nameItem.setName("JustDisplayDBFileName");
-		nameItem.setEnabled(false);
-		this.insert(nameItem,0);
 	}
 
 	/**
 	 * Domain Panel显示项目名称
 	 * @param name
 	 */
-	public void AddDBNameTab(String name){
+	public void displayDBNameAtDomainTab(String name){
 		if (null == name) return;
 		JTabbedPane panel = ((JTabbedPane)gui.getContentPane());
 		String newName = String.format("domain [%s]",name);
 		panel.setTitleAt(0,newName);
-	}
-
-	//修改之后不刷新，弃用
-	@Deprecated
-	public void changeTabName(String dbFileName){
-		Container ccc = getBurpFrame().getContentPane();
-		JTabbedPane ParentOfDomainHunter = (JTabbedPane) ccc.getComponent(0);//burpTabBar
-		int n = ParentOfDomainHunter.getComponentCount();
-
-		//find index of current DomainHunter
-		for (int i=n-1;i>=0;i--){
-			Component tmp = ParentOfDomainHunter.getComponent(i);
-			if (tmp.getName().equals("DomainHunterPro")){
-				ParentOfDomainHunter.setTitleAt(i,"xxxxx");//似乎burp不会刷新这个title的显示。
-
-				String tmpDbFile = ((GUIMain) tmp).getCurrentDBFile().getName();
-				if (tmpDbFile.equals(dbFileName)){
-					ParentOfDomainHunter.setTitleAt(i,tmpDbFile);
-				}
-			}//domain.DomainPanel
-		}
-	}
-
-	public int indexOfDomainHunter(String dbFileName){
-		Container ccc = getBurpFrame().getContentPane();
-		JTabbedPane ParentOfDomainHunter = (JTabbedPane) ccc.getComponent(0);//burpTabBar
-		int n = ParentOfDomainHunter.getComponentCount();
-
-		//find index of current DomainHunter
-		for (int i=n-1;i>=0;i--){//倒序查找更快
-			Component tmp = ParentOfDomainHunter.getComponent(i);
-			if (tmp.getName().equals("DomainHunterPro")){
-				String tmpDbFile = ((GUIMain) tmp).getCurrentDBFile().getName();
-				if (tmpDbFile.equals(dbFileName)){
-					return i;
-				}
-			}
-		}
-		return -1;
-	}
-
-	/**
-	 * DomainHunter*表示locked
-	 * DomainHunter表示unlocked
-	 * @return
-	 */
-	public static boolean isAlone() {
-		int num = 0;
-		JMenuBar menuBar = getBurpFrame().getJMenuBar();
-		int count = menuBar.getMenuCount();
-		for (int i =0;i<count;i++) {
-			if (menuBar.getMenu(i).getText().endsWith("Hunter")) {
-				num++;
-			}
-		}
-		return num<=1;
-	}
-
-	public static JFrame getBurpFrame()
-	{
-		for(Frame f : Frame.getFrames())
-		{
-			if(f.isVisible() && f.getTitle().startsWith(("Burp Suite")))
-			{
-				return (JFrame) f;
-			}
-		}
-		return null;
 	}
 }

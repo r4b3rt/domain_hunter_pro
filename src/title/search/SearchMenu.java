@@ -115,14 +115,14 @@ public class SearchMenu extends JPopupMenu {
 				searchField.setText(expresstion);
 			}
 		});
-		
+
 		JMenuItem CDNItems = new JMenuItem(new AbstractAction("CDN:  REGEX:Via:|X-Cache") {
 			@Override
 			public void actionPerformed(ActionEvent actionEvent) {
 				searchField.setText("REGEX:Via:|X-Cache");
 			}
 		});
-		
+
 		JMenuItem DNSRecord = new JMenuItem(new AbstractAction("DNS Records Items:   SOURCE:certain && status <=0") {
 			@Override
 			public void actionPerformed(ActionEvent actionEvent) {
@@ -131,6 +131,28 @@ public class SearchMenu extends JPopupMenu {
 			}
 		});
 
+		JMenuItem NotDefaultPort = new JMenuItem(new AbstractAction("Not Default Port Items:   PORT!=80 && PORT!=443") {
+			@Override
+			public void actionPerformed(ActionEvent actionEvent) {
+				searchField.setText("PORT!=80 && PORT!=443");
+			}
+		});
+
+		
+		JMenuItem XXLJob = new JMenuItem(new AbstractAction("XXLJob") {
+			@Override
+			public void actionPerformed(ActionEvent actionEvent) {
+				searchField.setText("color:white;background-color:#525D76;");
+			}
+		});
+		
+		JMenuItem Spring = new JMenuItem(new AbstractAction("Spring") {
+			@Override
+			public void actionPerformed(ActionEvent actionEvent) {
+				searchField.setText("Whitelabel Error Page||116323821||{\"timestamp\"");
+			}
+		});
+		
 		JMenuItem caseSensitive = new JMenuItem(new AbstractAction("Case Sensitive") {
 			@Override
 			public void actionPerformed(ActionEvent actionEvent) {
@@ -141,7 +163,8 @@ public class SearchMenu extends JPopupMenu {
 				}
 			}
 		});
-
+		
+		
 		SearchTextField searchTextField = ((SearchTextField)searchField);
 		if (searchTextField.isCaseSensitive()) {
 			caseSensitive.setText("Disable Case Sensitive");
@@ -159,11 +182,15 @@ public class SearchMenu extends JPopupMenu {
 		this.add(webpackItemAll);
 		this.add(AllJS);
 		this.addSeparator();//分割线
+		this.add(XXLJob);
+		this.add(Spring);
+		this.addSeparator();//分割线
 		this.add(ItemsWithResponse);
 		this.add(UrlRedirection);
 		this.add(ManualSaved);
 		this.add(DNSRecord);
 		this.add(CDNItems);
+		this.add(NotDefaultPort);
 		this.addSeparator();//分割线
 		this.add(caseSensitive);
 	}

@@ -3,19 +3,22 @@ package thread;
 import java.io.PrintWriter;
 import java.net.URL;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.BlockingQueue;
+
+import com.bit4woo.utilbox.utils.DomainUtils;
 
 import GUI.GUIMain;
 import base.IndexedHashMap;
 import burp.BurpExtender;
 import burp.IBurpExtenderCallbacks;
 import burp.IExtensionHelpers;
-import config.LineConfig;
+import config.ConfigManager;
+import config.ConfigName;
 import title.LineEntry;
-import utils.DomainToURLs;
 
 /** 
  * @author bit4woo
@@ -71,13 +74,16 @@ public class Producer extends Thread {//Producer do
 				Map.Entry<String,String> entry = domainQueue.take();
 				String host = entry.getKey();
 				String type = entry.getValue();
-				Set<URL> urls = new DomainToURLs(host).getUrls();
+				Set<URL> urls = new HashSet<>(new DomainUtils().toURLs(host));
 
 				List<LineEntry> tempEntries = new ArrayList<LineEntry>();
 				for (URL Url:urls) {
 					LineEntry item = new LineEntry(Url).firstRequest(guiMain.getTitlePanel().getTempConfig());
 
-					LineConfig.doFilter(item);
+					ConfigManager.doFilter(item);
+					if (ConfigManager.getBooleanConfigByKey(ConfigName.removeItemIfIgnored) && item.getCheckStatus().equals(LineEntry.CheckStatus_Checked)) {
+						continue;
+					}
 					item.setEntrySource(type);
 
 					String url = item.getUrl();
@@ -102,9 +108,12 @@ public class Producer extends Thread {//Producer do
 					tempEntries.add(item);
 				}
 
-				tempEntries = LineConfig.doSameHostFilter(tempEntries);
+				tempEntries = ConfigManager.doSameHostFilter(tempEntries);
 
 				for (LineEntry item:tempEntries) {
+					if (ConfigManager.getBooleanConfigByKey(ConfigName.removeItemIfIgnored) && item.getCheckStatus().equals(LineEntry.CheckStatus_Checked)) {
+						continue;
+					}
 					guiMain.getTitlePanel().getTitleTable().getLineTableModel().addNewLineEntry(item);
 					//stdout.println(new LineEntry(messageinfo,true).ToJson());
 					int leftTaskNum = domainQueue.size();
@@ -139,7 +148,7 @@ public class Producer extends Thread {//Producer do
 			try{//根据host查找
 				String host = new URL(url).getHost();//可能是域名、也可能是IP
 
-				Set<String> lineHost = line.getIPSet();//解析得到的IP集合
+				Set<String> lineHost = new HashSet<>(line.getIPSet());//解析得到的IP集合
 				lineHost.add(line.getHost());
 				if (lineHost.contains(host)) {
 					//HistoryLines.remove(line.getUrl());//如果有相同URL的记录，就删除这个记录。//ConcurrentModificationException
